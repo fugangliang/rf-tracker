@@ -210,18 +210,22 @@
   }
 
   /* 状態ヘッダー全文テキスト（§F3 コピー機能・レーンA携行用） */
-  function statusHeaderText(entries, entry) {
+  function statusHeaderText(entries, entry, opts) {
     const r = recovery(entries, entry);
     const fm = FAILURE_MODES[r.level];
     const mood = moodTrack(entries, entry, r.level);
+    const cond = condition(entries, entry);
+    const cmt = comments(entries, entry, opts);
+    const sig = m => cond.signals[m] ? SIGNAL_LABELS[cond.signals[m]] + '信号' : '—';
     const fmtDev = (m, label, unit) => {
       const v = entry[m], b = r.baselines[m], d = r.deviations[m];
       if (typeof v !== 'number') return `${label}: — (基準線 ${b.mean !== null ? b.mean.toFixed(1) : '—'}${unit})`;
       const ds = d !== null ? `${d >= 0 ? '+' : ''}${d.toFixed(1)}%` : '—';
-      return `${label}: ${v}${unit} (基準線比 ${ds}, n=${b.n})`;
+      return `${label}: ${sig(m)} ${v}${unit} (基準線比 ${ds}, n=${b.n}/${BASELINE_DAYS})`;
     };
     const lines = [];
     lines.push(`【状態ヘッダー ${entry.date}】`);
+    lines.push(`状態: ${CONDITION_LABELS[cond.state]}${cond.avgDev !== null ? `（3指標平均乖離 ${cond.avgDev >= 0 ? '+' : ''}${cond.avgDev.toFixed(1)}%）` : ''}`);
     if (r.level === 'building') {
       lines.push(`回復度: 基準構築中（n<7: ${r.building.join(', ')}）`);
     } else {
@@ -232,10 +236,10 @@
     lines.push(fmtDev('hrv', 'HRV', 'ms'));
     lines.push(fmtDev('sleep', '睡眠', ''));
     lines.push(fmtDev('bb', 'BB', ''));
-    const rb = baseline(entries, entry.date, 'rhr');
-    const rd = deviationPct(entry.rhr, rb.mean);
+    const rb = cond.rhrBaseline;
+    const rd = cond.rhrDev;
     if (typeof entry.rhr === 'number') {
-      lines.push(`安静時心拍: ${entry.rhr}bpm (基準線比 ${rd !== null ? (rd >= 0 ? '+' : '') + rd.toFixed(1) + '%' : '—'}${rd !== null && rd >= 10 ? ' ⚠懸念' : ''})`);
+      lines.push(`安静時心拍: ${sig('rhr')} ${entry.rhr}bpm (基準線比 ${rd !== null ? (rd >= 0 ? '+' : '') + rd.toFixed(1) + '%' : '—'}${rd !== null && rd >= 10 ? ' ⚠懸念' : ''})`);
     }
     lines.push(`予測故障モード: ${fm.mode}`);
     lines.push(`プロトコル: ${fm.protocol}`);
@@ -250,7 +254,142 @@
     if (mood.flag) lines.push(`⚠ 主観-客観乖離: ${mood.flag}`);
     if (entry.edema) lines.push('⚠ 浮腫フラグ: 体組成値は割り引いて解釈');
     if (Array.isArray(entry.confounds) && entry.confounds.length) lines.push(`交絡: ${entry.confounds.join(', ')}`);
+    lines.push(`体調: ${cmt.condition}`);
+    lines.push(`体重: ${cmt.weight}`);
+    lines.push(`体脂肪率: ${cmt.fat}`);
     return lines.join('\n');
+  }
+
+  /* ===== v1.1 表示レイヤー追加（コアロジック§4は不変更） ===== */
+
+  /* 信号判定。hrv/sleep/bb: 青 >−10% / 黄 ≤−10% / 赤 ≤−20%（回復度しきい値と同一）
+   * reversed(rhr): 青 <+5% / 黄 ≥+5% / 赤 ≥+10% */
+  function signal(dev, reversed) {
+    if (dev === null) return null;
+    if (reversed) return dev >= 10 ? 'red' : dev >= 5 ? 'yellow' : 'blue';
+    return dev <= -20 ? 'red' : dev <= -10 ? 'yellow' : 'blue';
+  }
+
+  /* 総合状態: 不調(bad)/平常(normal)/好調(good)/判定保留(building)
+   * 不調: 回復度（golf緩和後）が中または低
+   * 好調: 回復度高・3指標とも当日値ありで青・平均乖離≥+5%
+   * 平常: その他 */
+  function condition(entries, entry) {
+    const r = recovery(entries, entry);
+    const signals = {};
+    for (const m of ['hrv', 'sleep', 'bb']) signals[m] = signal(r.deviations[m], false);
+    const rb = baseline(entries, entry.date, 'rhr');
+    const rhrDev = deviationPct(entry.rhr, rb.mean);
+    signals.rhr = signal(rhrDev, true);
+    if (r.level === 'building') return { state: 'building', recovery: r, signals, avgDev: null, rhrDev, rhrBaseline: rb };
+    const devs = ['hrv', 'sleep', 'bb'].map(m => r.deviations[m]).filter(d => d !== null);
+    const avgDev = devs.length ? devs.reduce((a, b) => a + b, 0) / devs.length : null;
+    let state = 'normal';
+    if (r.level === 'low' || r.level === 'mid') state = 'bad';
+    else if (devs.length === 3 && avgDev >= 5 && ['hrv', 'sleep', 'bb'].every(m => signals[m] === 'blue')) state = 'good';
+    return { state, recovery: r, signals, avgDev, rhrDev, rhrBaseline: rb };
+  }
+
+  const CONDITION_LABELS = { good: '好調', normal: '平常', bad: '不調', building: '判定保留（基準構築中）' };
+  const SIGNAL_LABELS = { blue: '青', yellow: '黄', red: '赤' };
+
+  /* 直近28日平均と前28日平均の差（推移コメント用）。各窓n≥5で有効 */
+  function windowTrend(entries, dateStr, metric) {
+    const end = dateToNum(dateStr) + 1; // 当日含む
+    const collect = (from, to) => entries
+      .filter(e => { const d = dateToNum(e.date); return d >= from && d < to; })
+      .map(e => e[metric]).filter(v => typeof v === 'number');
+    const recent = collect(end - 28, end);
+    const prior = collect(end - 56, end - 28);
+    if (recent.length < 5 || prior.length < 5) return null;
+    const mean = a => a.reduce((x, y) => x + y, 0) / a.length;
+    return { diff: mean(recent) - mean(prior), recentMean: mean(recent), priorMean: mean(prior), nRecent: recent.length, nPrior: prior.length };
+  }
+
+  /* 状態評価コメント（体調・体重・体脂肪率）。ルールベースの決定的生成。
+   * opts.goalWeight: 目標体重（端末ローカル設定。未設定なら言及しない） */
+  function comments(entries, entry, opts) {
+    const goalWeight = opts && typeof opts.goalWeight === 'number' ? opts.goalWeight : null;
+    const c = condition(entries, entry);
+    const out = {};
+
+    // --- 体調 ---
+    {
+      const parts = [];
+      if (c.state === 'building') {
+        parts.push('基準線構築中（有効記録7日未満の指標あり）のため総合評価は保留。');
+      } else {
+        const names = { hrv: 'HRV', sleep: '睡眠', bb: 'BB' };
+        const flagged = ['hrv', 'sleep', 'bb'].filter(m => c.signals[m] === 'yellow' || c.signals[m] === 'red');
+        const missing = ['hrv', 'sleep', 'bb'].filter(m => c.signals[m] === null);
+        if (flagged.length === 0) {
+          parts.push(`回復3指標は基準線圏内${c.avgDev !== null && c.avgDev >= 5 ? `（平均 +${c.avgDev.toFixed(1)}% と上振れ）` : ''}。`);
+        } else {
+          parts.push(flagged.map(m => `${names[m]}が基準線比 ${c.recovery.deviations[m].toFixed(1)}%（${SIGNAL_LABELS[c.signals[m]]}）`).join('、') + '。');
+        }
+        if (missing.length) parts.push(`${missing.map(m => names[m]).join('・')}は当日値なし。`);
+        if (c.signals.rhr === 'yellow' || c.signals.rhr === 'red') {
+          parts.push(`安静時心拍が基準線比 +${c.rhrDev.toFixed(1)}% と高め（交感神経優位の可能性）。`);
+        }
+        if (c.recovery.relaxed) parts.push('golf交絡により回復度は1段階緩和済み。');
+        else if (Array.isArray(entry.confounds) && entry.confounds.length) parts.push(`交絡（${entry.confounds.join(', ')}）あり、数値は割り引いて解釈。`);
+      }
+      out.condition = parts.join(' ');
+    }
+
+    // --- 体重 ---
+    {
+      let latest = null;
+      for (let i = entries.length - 1; i >= 0; i--) {
+        if (typeof entries[i].weight === 'number' && dateToNum(entries[i].date) <= dateToNum(entry.date)) { latest = entries[i]; break; }
+      }
+      if (!latest) {
+        out.weight = '体重の記録なし。';
+      } else {
+        const b = baseline(entries, entry.date, 'weight');
+        const dev = deviationPct(latest.weight, b.mean);
+        const parts = [`${latest.weight.toFixed(1)}kg（${latest.date}実測${dev !== null ? `、基準線比 ${dev >= 0 ? '+' : ''}${dev.toFixed(1)}%` : ''}）。`];
+        const tr = windowTrend(entries, entry.date, 'weight');
+        if (tr) {
+          const d = tr.diff;
+          parts.push(`直近28日平均 ${tr.recentMean.toFixed(1)}kg は前28日比 ${d >= 0 ? '+' : ''}${d.toFixed(1)}kg と${Math.abs(d) < 0.2 ? '横ばい' : d < 0 ? '減少' : '増加'}。`);
+        } else {
+          parts.push('推移評価には記録不足（各28日窓に5件以上必要）。');
+        }
+        if (goalWeight !== null) {
+          const gap = latest.weight - goalWeight;
+          parts.push(gap > 0 ? `目標${goalWeight.toFixed(1)}kgまで残り${gap.toFixed(1)}kg。` : `目標${goalWeight.toFixed(1)}kgを達成。`);
+        }
+        if (latest.edema) parts.push('※浮腫フラグ日の実測。割り引いて解釈。');
+        out.weight = parts.join(' ');
+      }
+    }
+
+    // --- 体脂肪率 ---
+    {
+      let latest = null;
+      for (let i = entries.length - 1; i >= 0; i--) {
+        if (typeof entries[i].fat === 'number' && dateToNum(entries[i].date) <= dateToNum(entry.date)) { latest = entries[i]; break; }
+      }
+      if (!latest) {
+        out.fat = '体脂肪率の記録なし。';
+      } else {
+        const b = baseline(entries, entry.date, 'fat');
+        const dev = deviationPct(latest.fat, b.mean);
+        const parts = [`${latest.fat.toFixed(1)}%（${latest.date}実測${dev !== null ? `、基準線比 ${dev >= 0 ? '+' : ''}${dev.toFixed(1)}%` : ''}）。`];
+        const tr = windowTrend(entries, entry.date, 'fat');
+        if (tr) {
+          const d = tr.diff;
+          parts.push(`直近28日平均 ${tr.recentMean.toFixed(1)}% は前28日比 ${d >= 0 ? '+' : ''}${d.toFixed(1)}pt と${Math.abs(d) < 0.2 ? '横ばい' : d < 0 ? '低下' : '上昇'}。`);
+        } else {
+          parts.push('推移評価には記録不足（各28日窓に5件以上必要）。');
+        }
+        if (latest.edema) parts.push('※浮腫フラグ日の実測。体脂肪率は見かけ上低く出るため割り引いて解釈。');
+        out.fat = parts.join(' ');
+      }
+    }
+
+    return out;
   }
 
   /* §F5 月次サマリー: 要約＋TSV */
@@ -297,8 +436,10 @@
 
   return {
     NUMERIC_FIELDS, CONFOUNDS, BASELINE_DAYS, MIN_N, FAILURE_MODES,
+    CONDITION_LABELS, SIGNAL_LABELS,
     dateToNum, isValidDateStr, isExcludedFromBaseline,
     baseline, deviationPct, recovery, moodTrack, detectEdema,
+    signal, condition, windowTrend, comments,
     parseImport, exportJSON, statusHeaderText, monthlySummary
   };
 });

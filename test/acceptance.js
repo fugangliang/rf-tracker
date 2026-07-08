@@ -146,6 +146,67 @@ console.log('5. コアロジック単体検証');
   check('n<7でフラグ沈黙・基準構築中', mt3.building === true && mt3.flag === null, `n=${mt3.baseline.n}`);
 }
 
+// 5.6 v1.1 信号・総合状態・コメント
+{
+  const mkE = (n, base, today) => {
+    const es = [];
+    for (let i = 1; i <= n; i++) {
+      const d = new Date(Date.UTC(2026, 0, i)).toISOString().slice(0, 10);
+      es.push({ date: d, hrv: base, rhr: 60, sleep: base, bb: base, weight: 88, fat: 26, muscle: 31, confounds: [], excludeBaseline: false });
+    }
+    const e = Object.assign({ date: '2026-01-29', rhr: 60, confounds: [], excludeBaseline: false }, today);
+    return { es: es.concat([e]), e };
+  };
+  check('信号: 青(-5%)', L.signal(-5, false) === 'blue');
+  check('信号: 黄(-10%)', L.signal(-10, false) === 'yellow');
+  check('信号: 赤(-20%)', L.signal(-20, false) === 'red');
+  check('信号rhr反転: 黄(+5%)', L.signal(5, true) === 'yellow');
+  check('信号rhr反転: 赤(+10%)', L.signal(10, true) === 'red');
+  {
+    const { es, e } = mkE(28, 100, { hrv: 100, sleep: 100, bb: 100 });
+    check('総合状態: 平常(乖離0)', L.condition(es, e).state === 'normal');
+  }
+  {
+    const { es, e } = mkE(28, 100, { hrv: 108, sleep: 106, bb: 107 });
+    const c = L.condition(es, e);
+    check('総合状態: 好調(全青・平均+7%)', c.state === 'good', c.state);
+  }
+  {
+    const { es, e } = mkE(28, 100, { hrv: 85, sleep: 100, bb: 100 });
+    check('総合状態: 不調(回復度中)', L.condition(es, e).state === 'bad');
+  }
+  {
+    const { es, e } = mkE(28, 100, { hrv: 85, sleep: 100, bb: 100, confounds: ['golf'] });
+    const c = L.condition(es, e);
+    check('総合状態: golf緩和で中→高なら平常', c.state === 'normal' && c.recovery.relaxed);
+  }
+  {
+    const { es, e } = mkE(5, 100, { hrv: 100, sleep: 100, bb: 100 });
+    check('総合状態: n<7で判定保留', L.condition(es, e).state === 'building');
+  }
+  {
+    const { es, e } = mkE(28, 100, { hrv: 108, sleep: 106, bb: null });
+    check('総合状態: 当日値欠けは好調にしない', L.condition(es, e).state === 'normal');
+  }
+  {
+    const { es, e } = mkE(28, 100, { hrv: 100, sleep: 100, bb: 100, weight: 88.0, fat: 26.0 });
+    const cm = L.comments(es, e, { goalWeight: 85.0 });
+    check('コメント: 体調文生成', cm.condition.includes('基準線圏内'), cm.condition);
+    check('コメント: 体重に目標差', cm.weight.includes('残り3.0kg'), cm.weight);
+    check('コメント: 体脂肪率文生成', cm.fat.startsWith('26.0%'), cm.fat);
+    const cm2 = L.comments(es, e, {});
+    check('コメント: 目標未設定なら言及なし', !cm2.weight.includes('目標'));
+  }
+  {
+    const tr = L.windowTrend(
+      Array.from({ length: 56 }, (_, i) => ({
+        date: new Date(Date.UTC(2026, 0, 1 + i)).toISOString().slice(0, 10),
+        weight: i < 28 ? 89 : 88
+      })), '2026-02-25', 'weight');
+    check('推移: 前28日比 -1.0kg', tr && Math.abs(tr.diff - (-1)) < 1e-9, JSON.stringify(tr));
+  }
+}
+
 if (HAS_DATA) {
   const entries2 = all();
   console.log('6. 状態ヘッダー全文（2026-07-08・目視確認用）');

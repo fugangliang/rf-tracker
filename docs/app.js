@@ -105,18 +105,32 @@ async function renderDashboard() {
   const r = L.recovery(entries, latest);
   const fm = L.FAILURE_MODES[r.level];
   const mood = L.moodTrack(entries, latest, r.level);
-  const headerText = L.statusHeaderText(entries, latest);
+  const goalWeight = await getMeta('goalWeight');
+  const opts = { goalWeight: typeof goalWeight === 'number' ? goalWeight : null };
+  const cond = L.condition(entries, latest);
+  const cmt = L.comments(entries, latest, opts);
+  const headerText = L.statusHeaderText(entries, latest, opts);
+
+  // 総合状態（v1.1）: 不調/平常/好調
+  let condHtml = `<div class="cond-state cond-${cond.state}">${L.CONDITION_LABELS[cond.state]}</div>`;
+  if (cond.avgDev !== null) condHtml += `<div class="status-sub">3指標平均乖離 ${cond.avgDev >= 0 ? '+' : ''}${cond.avgDev.toFixed(1)}%</div>`;
 
   let levelHtml;
   if (r.level === 'building') {
-    levelHtml = `<div class="status-level level-building">基準構築中</div>
-      <div class="status-sub">n&lt;7: ${r.building.join(', ')}</div>`;
+    levelHtml = `<div class="status-line"><span class="label">回復度:</span> 基準構築中（n&lt;7: ${r.building.join(', ')}）</div>`;
   } else {
-    levelHtml = `<div class="status-level level-${r.level}">回復度 ${fm.label}</div>`;
+    levelHtml = `<div class="status-line"><span class="label">回復度:</span> <b class="level-${r.level}">${fm.label}</b></div>`;
     if (r.relaxed) levelHtml += `<div class="notice">golf交絡により1段階緩和（${L.FAILURE_MODES[r.preRelaxLevel].label}→${fm.label}）</div>`;
   }
-  const devLine = ['hrv', 'sleep', 'bb'].map(m =>
-    `${m.toUpperCase()} ${fmtDev(r.deviations[m])}`).join(' / ');
+
+  // 信号チップ（HRV/睡眠/BB/安静時心拍）
+  const sigNames = { hrv: 'HRV', sleep: '睡眠', bb: 'BB', rhr: '心拍' };
+  const sigDevs = { hrv: r.deviations.hrv, sleep: r.deviations.sleep, bb: r.deviations.bb, rhr: cond.rhrDev };
+  const sigLine = ['hrv', 'sleep', 'bb', 'rhr'].map(m => {
+    const s = cond.signals[m];
+    if (!s) return `<span class="chip chip-none">${sigNames[m]} —</span>`;
+    return `<span class="chip chip-${s}">${sigNames[m]} ${L.SIGNAL_LABELS[s]}<small> ${fmtDev(sigDevs[m])}</small></span>`;
+  }).join('');
 
   let moodHtml;
   if (mood.building) {
@@ -129,8 +143,9 @@ async function renderDashboard() {
 
   let html = `<div class="card">
     <h2>状態ヘッダー（${latest.date}）</h2>
+    ${condHtml}
+    <div class="chip-row">${sigLine}</div>
     ${levelHtml}
-    <div class="status-line"><span class="label">基準線比:</span> ${devLine}</div>
     <div class="status-line"><span class="label">予測故障モード:</span> ${esc(fm.mode)}</div>
     <div class="status-line"><span class="label">プロトコル:</span> ${esc(fm.protocol)}</div>
     <div class="status-line"><span class="label">警告灯感度:</span> ${fm.sensitivity === '高' ? '<b class="level-low">高</b>' : '標準'}</div>
@@ -139,6 +154,13 @@ async function renderDashboard() {
     ${latest.edema ? `<div class="notice">浮腫フラグ: 体組成値は割り引いて解釈</div>` : ''}
     ${latest.confounds.length ? `<div class="status-line"><span class="label">交絡:</span> ${latest.confounds.join(', ')}</div>` : ''}
     <button class="btn secondary" id="copy-status">状態ヘッダーを全文コピー</button>
+  </div>
+  <div class="card">
+    <h2>状態評価コメント</h2>
+    <div class="comment-line"><span class="label">体調:</span> ${esc(cmt.condition)}</div>
+    <div class="comment-line"><span class="label">体重:</span> ${esc(cmt.weight)}</div>
+    <div class="comment-line"><span class="label">体脂肪率:</span> ${esc(cmt.fat)}</div>
+    ${opts.goalWeight === null ? '<p class="muted" style="margin-top:6px">目標体重は「保全」タブで設定すると体重コメントに反映される</p>' : ''}
   </div>`;
 
   html += `<div class="metric-grid">`;
@@ -160,12 +182,12 @@ async function renderDashboard() {
         if (md.reversed) devCls = dev >= 10 ? 'dev-concern' : (dev <= 0 ? 'dev-pos' : '');
         else devCls = dev >= 0 ? 'dev-pos' : 'dev-neg';
       }
-      refHtml = `基準線 ${b.mean !== null ? fmtNum(b.mean, md.digits) : '—'}${md.unit}（n=${b.n}）`;
+      refHtml = `基準線 ${b.mean !== null ? fmtNum(b.mean, md.digits) : '—'}${md.unit}（n=${b.n}/${L.BASELINE_DAYS}）`;
       if (md.showChange || !md.sparse) refHtml += dev !== null ? ` <span class="${devCls}">${fmtDev(dev)}</span>` : '';
       refHtml += staleNote;
     } else {
       valueHtml = `—`;
-      refHtml = `基準線 ${b.mean !== null ? fmtNum(b.mean, md.digits) : '—'}${md.unit}（n=${b.n}）`;
+      refHtml = `基準線 ${b.mean !== null ? fmtNum(b.mean, md.digits) : '—'}${md.unit}（n=${b.n}/${L.BASELINE_DAYS}）`;
     }
     html += `<div class="metric-card">
       <div class="name">${md.name}</div>
@@ -411,7 +433,26 @@ async function renderBackup() {
   <div class="card">
     <h2>全データ再取込</h2>
     <p class="muted">エクスポートしたJSONは「取込」タブにペーストすれば復元される（同一経路）。</p>
+  </div>
+  <div class="card">
+    <h2>設定</h2>
+    <label class="field">目標体重 (kg)<input type="number" step="0.1" id="goal-weight" value="${typeof (await getMeta('goalWeight')) === 'number' ? await getMeta('goalWeight') : ''}"></label>
+    <button class="btn secondary" id="goal-save">設定を保存</button>
+    <p class="muted" style="margin-top:6px">この端末のみに保存され、状態評価コメントの体重評価に使われる。</p>
+    <div class="result" id="goal-result"></div>
   </div>`;
+  $('#goal-save').addEventListener('click', async () => {
+    const s = $('#goal-weight').value.trim();
+    const v = s === '' ? null : +s;
+    if (v !== null && (!isFinite(v) || v <= 0)) {
+      $('#goal-result').textContent = '正の数値を入力（空欄で解除）';
+      $('#goal-result').className = 'result err';
+      return;
+    }
+    await setMeta('goalWeight', v);
+    $('#goal-result').textContent = v === null ? '目標体重を解除しました' : `目標体重 ${v}kg を保存しました`;
+    $('#goal-result').className = 'result ok';
+  });
   $('#export-btn').addEventListener('click', async () => {
     const json = L.exportJSON(await getAllEntries());
     const blob = new Blob([json], { type: 'application/json' });

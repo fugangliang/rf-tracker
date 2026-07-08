@@ -39,6 +39,23 @@ main { padding: 12px; max-width: 720px; margin: 0 auto; }
 .card h2 { font-size: 13px; color: var(--muted); font-weight: 600; margin-bottom: 8px; }
 
 /* 状態ヘッダー */
+.cond-state { font-size: 28px; font-weight: 800; letter-spacing: .05em; }
+.cond-good { color: var(--high); }
+.cond-normal { color: var(--text); }
+.cond-bad { color: var(--low); }
+.cond-building { color: var(--building); font-size: 20px; }
+.chip-row { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0 4px; }
+.chip {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 5px 10px; border-radius: 14px; font-size: 13px; font-weight: 600;
+}
+.chip small { font-weight: 400; opacity: .85; }
+.chip-blue { background: #065f4633; color: var(--high); border: 1px solid #065f46; }
+.chip-yellow { background: #78350f4d; color: var(--mid); border: 1px solid #92400e; }
+.chip-red { background: #7f1d1d4d; color: var(--low); border: 1px solid #991b1b; }
+.chip-none { background: var(--panel2); color: var(--muted); border: 1px solid #334155; }
+.comment-line { font-size: 13px; line-height: 1.6; margin-top: 6px; }
+.comment-line .label { color: var(--accent); font-weight: 600; }
 .status-level { font-size: 22px; font-weight: 700; }
 .level-high { color: var(--high); } .level-mid { color: var(--mid); }
 .level-low { color: var(--low); } .level-building { color: var(--building); }
