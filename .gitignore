@@ -1,0 +1,7 @@
+# 個人健康データはリポジトリに含めない（GitHub Pages公開対策）
+data/
+# 個人プロファイル・実測値を含む要件定義書（ローカルのみ）
+docs_requirements_v1.md
+# エクスポートファイル
+rf-tracker-export_*.json
+.DS_Store

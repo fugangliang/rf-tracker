@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>RF基準線トラッカー</title>
+<meta name="theme-color" content="#1e293b">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/icon-180.png" type="image/png">
+<link rel="apple-touch-icon" href="icons/icon-180.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="RFトラッカー">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header id="appbar">
+  <h1>RF基準線トラッカー</h1>
+  <span id="backup-badge" class="badge hidden" title="最終エクスポートから7日超過">要バックアップ</span>
+</header>
+
+<main id="view"></main>
+
+<nav id="tabbar">
+  <button data-tab="dashboard" class="active">状態</button>
+  <button data-tab="import">取込</button>
+  <button data-tab="record">記録</button>
+  <button data-tab="trend">推移</button>
+  <button data-tab="monthly">月次</button>
+  <button data-tab="backup">保全</button>
+</nav>
+
+<script src="logic.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

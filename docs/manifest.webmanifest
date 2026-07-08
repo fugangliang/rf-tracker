@@ -1,0 +1,14 @@
+{
+  "name": "RF基準線トラッカー",
+  "short_name": "RFトラッカー",
+  "description": "個人基準線比による回復度・体組成トラッカー（完全ローカル）",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#0f172a",
+  "theme_color": "#1e293b",
+  "icons": [
+    { "src": "icons/icon-180.png", "sizes": "180x180", "type": "image/png" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ]
+}
