@@ -55,6 +55,15 @@
 2. iPhoneのファイルApp「ダウンロード」に保存される → iCloud Drive/AirDropでMacへ →
    `~/Documents/rf-tracker/data/exports/` に移動（Time Machine対象・push対象外）
 
+### Garmin書き出しCSVからの一括取込（2026-07-16確定）
+
+- 「睡眠」CSVの列マッピング: スコア→sleep、安静時心拍→rhr、Body Battery→bb
+- **「睡眠」CSVの「HRVステータス」列は7日平均であり、夜間HRV（hrv）には使えない**
+  （2026-06-28で検証: 睡眠CSV=35、HRVステータスCSVの夜間HRV=32・7日平均=35。backfillは32を採用）。
+  hrvは「HRVステータス」CSV（夜間HRV列、日付は「7月 6日」形式）から取る。無ければ null
+- 取込は同一日付を**丸ごと置換**する（IndexedDB put）。既に日次取込済みの日付に
+  null入りJSONを再取込すると mood・weight 等が消えるため、未取込の日付だけ取り込む
+
 ### 例外時の処理
 
 | 事象 | 処理 |
