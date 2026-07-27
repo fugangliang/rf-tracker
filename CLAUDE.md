@@ -74,6 +74,21 @@
 - 取込は同一日付を**丸ごと置換**する（IndexedDB put）。既に日次取込済みの日付に
   null入りJSONを再取込すると mood・weight 等が消えるため、未取込の日付だけ取り込む
 
+### Garmin自動取得（2026-07-27構築・案A＝仕様§8変更なし）
+
+- 構成: `scripts/garmin_fetch.py`（venv: `.venv/`・非公式`garminconnect`ライブラリ）を
+  launchd（`scripts/com.rf.rf-tracker.garmin.plist`→`~/Library/LaunchAgents/`）で毎朝9:30に実行
+  → sleep/rhr/bb/hrv を取得し `data/import/auto_daily_latest.json`（固定名上書き）と
+  iCloud Drive `rf-tracker/auto_daily_latest.json` に出力
+- iPhone側: ショートカット（iCloudのJSON→クリップボード）→アプリ取込タブでペースト→取込（約2タップ）
+- **重複取込によるmood・weight消失を防ぐため、前回生成日の翌日以降だけを出力する**
+  （状態: `data/auto_fetch_state.json`。`--since` 指定時は状態を進めない＝検証・欠落追補用）
+- 認証: 初回のみ `scripts/garmin_auth.py` をTerminalで対話実行（トークンは `~/.garminconnect/`・
+  パスワード非保存）。トークン失効時も同スクリプトで再認証
+- 非公式APIのためGarmin側変更で壊れ得る。壊れたら従来のCSV運用（上節）に一時退避
+- `[要確認]` bb（起床時Body Battery）のフィールドマッピングは初回認証後に
+  `--since 2026-07-21 --stdout` でCSV実績値（7/21〜27）と突合して検証する
+
 ### 例外時の処理
 
 | 事象 | 処理 |

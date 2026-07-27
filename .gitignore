@@ -5,3 +5,4 @@ docs_requirements_v1.md
 # エクスポートファイル
 rf-tracker-export_*.json
 .DS_Store
+.venv/
