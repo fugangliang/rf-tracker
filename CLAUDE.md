@@ -18,8 +18,15 @@
 2. 保全タブで目標体重を設定したか（未設定だと体重コメントに目標差が出ない）
 3. moodのn≥7到達後（7/14頃〜）、主観-客観乖離フラグの挙動に違和感がないか →「要確認（未決）」参照
 4. `daily_20260710-16.json` をiPhoneで取込済みか（保全タブで総エントリ数を確認）
-5. 7/10〜7/16の夜間HRVが未投入。Garminから「HRVステータス」CSVを書き出せば追補JSONを作る
-6. 7/9のデータがCSV窓の外で欠落（必要ならスクショから追補）
+5. 7/10〜7/16の夜間HRVが未投入。APIで取得可能になったが、再取込は当該日のmood・weightを
+   消すため実施保留（RFがmood再入力を許容するなら7日分の完全JSONを生成できる）`[要確認]`
+6. ~~7/9のデータ欠落~~ → 2026-07-27解消: `data/import/daily_gap_20260709-0720.json`
+   （7/9・7/17〜20の5日分・HRV含む）を生成済み。iPhoneでの取込待ち
+8. （2026-07-27新規）`daily_gap_20260709-0720.json` と `auto_daily_latest.json`（7/21〜27）を
+   iPhoneで取込済みか。※7/21〜27はAirDrop済みの `daily_20260721-27.json` と同一内容のため
+   どちらか一方を1回だけ取り込む（二重取込は同一データなので実害はないが、mood入力後なら消える）
+9. （2026-07-27新規）iPhoneショートカット「ファイルを取得（iCloud rf-tracker/auto_daily_latest.json）
+   →クリップボードにコピー」をRFが作成したか
 7. `docs/healthcare_baseline_doc_v1.md`・`docs/healthcare_v2_instructions.md`（未追跡）が
    公開配信対象の `docs/` 直下にある。個人情報を含むならpush前に `data/` 等へ移動 `[要確認]`
 
@@ -86,8 +93,10 @@
 - 認証: 初回のみ `scripts/garmin_auth.py` をTerminalで対話実行（トークンは `~/.garminconnect/`・
   パスワード非保存）。トークン失効時も同スクリプトで再認証
 - 非公式APIのためGarmin側変更で壊れ得る。壊れたら従来のCSV運用（上節）に一時退避
-- `[要確認]` bb（起床時Body Battery）のフィールドマッピングは初回認証後に
-  `--since 2026-07-21 --stdout` でCSV実績値（7/21〜27）と突合して検証する
+- フィールドマッピングは2026-07-27に7/21〜27のCSV実績値と全フィールド突合し完全一致を確認済み。
+  **CSVの「Body Battery」列の正体は起床時値ではなく睡眠中回復量（sleep APIのbodyBatteryChange）**
+- 環境: venvはuv管理Python 3.12（システムPython 3.9では旧garthしか入らずSSO変更で401になる）。
+  認証済み（2026-07-27）・launchd登録済み（`launchctl list | grep rf-tracker` で確認可）
 
 ### 例外時の処理
 

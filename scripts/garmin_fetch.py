@@ -6,7 +6,9 @@
 - 出力先: data/import/auto_daily_latest.json（固定名・上書き）と
   iCloud Drive の rf-tracker/auto_daily_latest.json（iPhoneショートカットが読む）
 - 列マッピングはCSV運用（CLAUDE.md 2026-07-16確定）と同一:
-  睡眠スコア→sleep / 安静時心拍→rhr / 起床時Body Battery→bb / 夜間HRV→hrv
+  睡眠スコア→sleep / 安静時心拍→rhr / bodyBatteryChange→bb / 夜間HRV→hrv
+  （CSVの「Body Battery」列＝睡眠中の回復量＝sleep APIのbodyBatteryChange。
+    2026-07-27にCSV実績値7日分と突合し全一致を確認済み）
 
 実行例:
   garmin_fetch.py                      # 通常運用（前回以降〜今日）
@@ -51,11 +53,11 @@ def safe(fn, *args):
 
 
 def fetch_sleep(api, d):
+    """睡眠スコアと bodyBatteryChange（睡眠中BB回復量＝CSVのBody Battery列と同一）"""
     js = api.get_sleep_data(d) or {}
     dto = js.get("dailySleepDTO") or {}
     score = ((dto.get("sleepScores") or {}).get("overall") or {}).get("value")
-    sleep_end_gmt = dto.get("sleepEndTimestampGMT")  # ms
-    return score, sleep_end_gmt
+    return score, js.get("bodyBatteryChange")
 
 
 def fetch_rhr(api, d):
@@ -68,26 +70,6 @@ def fetch_rhr(api, d):
 def fetch_hrv(api, d):
     js = api.get_hrv_data(d) or {}
     return (js.get("hrvSummary") or {}).get("lastNightAvg")
-
-
-def fetch_bb_at_wake(api, d, sleep_end_gmt_ms):
-    """起床時Body Battery。睡眠終了時刻に最も近いサンプル値を採る。
-    睡眠終了時刻が不明なら当日正午（ローカル）までの最大値で代替。"""
-    days = api.get_body_battery(d) or []
-    if not days:
-        return None
-    arr = days[0].get("bodyBatteryValuesArray") or []
-    samples = [(s[0], s[2]) for s in arr if len(s) >= 3 and s[2] is not None]
-    if not samples:
-        return None
-    if sleep_end_gmt_ms:
-        ts, level = min(samples, key=lambda s: abs(s[0] - sleep_end_gmt_ms))
-        if abs(ts - sleep_end_gmt_ms) <= 45 * 60 * 1000:
-            return level
-    noon_local = datetime.datetime.strptime(d, "%Y-%m-%d").replace(hour=12)
-    noon_ms = noon_local.timestamp() * 1000
-    morning = [lv for ts, lv in samples if ts <= noon_ms]
-    return max(morning) if morning else None
 
 
 def load_state():
@@ -135,11 +117,10 @@ def main():
     while d <= today:
         ds = d.isoformat()
         e = empty_entry(ds)
-        score_end = safe(fetch_sleep, api, ds) or (None, None)
-        e["sleep"], sleep_end = score_end
-        e["rhr"] = safe(fetch_rhr, api, ds)
+        e["sleep"], e["bb"] = safe(fetch_sleep, api, ds) or (None, None)
+        rhr = safe(fetch_rhr, api, ds)
+        e["rhr"] = int(round(rhr)) if rhr is not None else None  # APIはfloatで返す
         e["hrv"] = safe(fetch_hrv, api, ds)
-        e["bb"] = safe(fetch_bb_at_wake, api, ds, sleep_end)
         got = {k: e[k] for k in ("sleep", "rhr", "hrv", "bb")}
         if any(v is not None for v in got.values()):
             entries.append(e)
