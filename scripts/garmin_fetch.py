@@ -123,7 +123,11 @@ def main():
         return
 
     api = Garmin()
-    api.login(TOKEN_DIR)
+    try:
+        api.login(TOKEN_DIR)
+    except Exception as e:
+        log(f"トークンでのログイン失敗（要再認証: scripts/garmin_auth.py）: {e}")
+        sys.exit(0)  # launchd常駐時にエラー扱いにしない
     log(f"取得範囲: {start} 〜 {today}")
 
     entries = []

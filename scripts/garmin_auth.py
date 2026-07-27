@@ -8,7 +8,7 @@
 import getpass
 import os
 
-import garth
+from garminconnect import Garmin
 
 TOKEN_DIR = os.path.expanduser("~/.garminconnect")
 
@@ -16,10 +16,15 @@ TOKEN_DIR = os.path.expanduser("~/.garminconnect")
 def main():
     email = input("Garmin Connect メールアドレス: ").strip()
     password = getpass.getpass("パスワード（表示されません）: ")
-    garth.login(email, password)  # MFA有効時はコード入力を求められる
-    garth.save(TOKEN_DIR)
+    api = Garmin(
+        email=email,
+        password=password,
+        prompt_mfa=lambda: input("MFAコード（メール/SMSの6桁）: ").strip(),
+    )
+    api.login(TOKEN_DIR)  # 認証成功時にトークンをTOKEN_DIRへ自動保存する
     os.chmod(TOKEN_DIR, 0o700)
-    print(f"\n認証成功。トークンを {TOKEN_DIR} に保存した。")
+    name = getattr(api, "display_name", None) or getattr(api, "full_name", None)
+    print(f"\n認証成功（アカウント: {name}）。トークンを {TOKEN_DIR} に保存した。")
     print("動作確認: .venv/bin/python scripts/garmin_fetch.py --since 2026-07-21 --stdout")
 
 
