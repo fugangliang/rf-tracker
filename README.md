@@ -43,8 +43,8 @@ Service Workerとmanifestは http(s) 経由でのみ有効（file:// 不可）�
 
 ## 初回データ投入（受け入れ手順）
 
-1. `data/backfill_import.json` の内容をインポートタブにペースト→取込（178件）
-2. `data/daily_20260707-08.json` の内容を取込（2件）
+1. `data/import/backfill_import.json` の内容をインポートタブにペースト→取込（178件）
+2. `data/import/daily_20260707-08.json` の内容を取込（2件）
 3. 確認: 保全タブで総エントリ数180 / 状態タブで基準線比の実値表示 /
    エクスポート→再取込で完全一致
 

@@ -4,7 +4,7 @@ const fs = require('fs');
 const path = require('path');
 const L = require('../docs/logic.js');
 // 実測データ（data/ は個人健康データのためgitignore。手元にない場合は受け入れ手順部分をスキップ）
-const HAS_DATA = fs.existsSync(path.join(__dirname, '../data/backfill_import.json'));
+const HAS_DATA = fs.existsSync(path.join(__dirname, '../data/import/backfill_import.json'));
 
 let pass = 0, fail = 0;
 function check(name, cond, detail) {
@@ -20,7 +20,7 @@ function all() { return [...db.values()].sort((a, b) => a.date < b.date ? -1 : 1
 if (!HAS_DATA) console.log('data/ が無いため受け入れ手順（1〜4,6）をスキップし、単体検証（5）のみ実行\n');
 if (HAS_DATA) {
 console.log('1. バックフィル取込（178件）');
-const backfill = fs.readFileSync(path.join(__dirname, '../data/backfill_import.json'), 'utf8');
+const backfill = fs.readFileSync(path.join(__dirname, '../data/import/backfill_import.json'), 'utf8');
 const r1 = L.parseImport(backfill, all());
 apply(r1);
 check('エラー0件', r1.errors.length === 0, JSON.stringify(r1.errors.slice(0, 3)));
@@ -28,7 +28,7 @@ check('178件取込', r1.entries.length === 178 && db.size === 178, `entries=${r
 check('deep/waterキーは無視して受理', !('deep' in all()[0]) && !('water' in all()[0]));
 
 console.log('2. 直近2日分取込');
-const daily = fs.readFileSync(path.join(__dirname, '../data/daily_20260707-08.json'), 'utf8');
+const daily = fs.readFileSync(path.join(__dirname, '../data/import/daily_20260707-08.json'), 'utf8');
 const r2 = L.parseImport(daily, all());
 apply(r2);
 check('エラー0件', r2.errors.length === 0, JSON.stringify(r2.errors));

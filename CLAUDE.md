@@ -64,9 +64,9 @@
 
 ### Garmin書き出しCSVからの一括取込（2026-07-16確定）
 
-- **GarminからDLしたCSV（睡眠・HRVステータス・体組成等）は `data/input/` に保管する**（2026-07-27確定）。
-  保管時は日付付きにリネームする（例: `睡眠260727.csv`）。生成した追補JSONは `data/` 直下に置く。
-  `data/` ごとgitignore済みのためpush対象外
+- **`data/` のフォルダ構成（2026-07-27確定）**: DLしたCSV（睡眠・HRVステータス・体組成等）→ `data/input/`
+  （日付付きにリネーム。例: `睡眠260727.csv`）、アプリに取り込むJSON（backfill・daily追補・omron）→ `data/import/`、
+  週次エクスポート → `data/exports/`。`data/` 直下にファイルを置かない。`data/` ごとgitignore済みのためpush対象外
 - 「睡眠」CSVの列マッピング: スコア→sleep、安静時心拍→rhr、Body Battery→bb
 - **「睡眠」CSVの「HRVステータス」列は7日平均であり、夜間HRV（hrv）には使えない**
   （2026-06-28で検証: 睡眠CSV=35、HRVステータスCSVの夜間HRV=32・7日平均=35。backfillは32を採用）。
