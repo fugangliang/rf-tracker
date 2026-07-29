@@ -206,11 +206,24 @@ async function renderDashboard() {
 async function renderImport() {
   view().innerHTML = `<div class="card">
     <h2>JSONインポート（日次運用の主入口）</h2>
+    <button class="btn" id="import-file-btn">ファイルから取込</button>
+    <p class="muted">毎朝の自動生成分: iCloud Drive → rf-tracker → auto_daily_latest.json を選択</p>
     <textarea id="import-text" placeholder='[{"date":"2026-07-08","hrv":34,...}] をペースト'></textarea>
     <button class="btn" id="import-btn">取込</button>
     <div class="result" id="import-result"></div>
   </div>`;
   $('#import-btn').addEventListener('click', doImport);
+  const fileInput = document.createElement('input');
+  fileInput.type = 'file';
+  fileInput.accept = '.json,application/json,text/plain';
+  $('#import-file-btn').addEventListener('click', () => fileInput.click());
+  fileInput.addEventListener('change', async () => {
+    const f = fileInput.files[0];
+    if (!f) return;
+    $('#import-text').value = (await f.text()).trim(); // 内容を可視化してから通常経路で取込
+    fileInput.value = '';
+    await doImport();
+  });
 }
 
 async function doImport() {

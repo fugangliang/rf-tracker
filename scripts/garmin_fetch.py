@@ -25,6 +25,7 @@ TOKEN_DIR = os.path.expanduser("~/.garminconnect")
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 STATE_PATH = os.path.join(ROOT, "data", "auto_fetch_state.json")
 OUT_LOCAL = os.path.join(ROOT, "data", "import", "auto_daily_latest.json")
+# アプリの「ファイルから取込」が読む場所（iPhoneのファイルApp→iCloud Drive→rf-tracker）
 ICLOUD_OUT = os.path.expanduser(
     "~/Library/Mobile Documents/com~apple~CloudDocs/rf-tracker/auto_daily_latest.json"
 )
