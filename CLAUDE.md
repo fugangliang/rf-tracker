@@ -22,11 +22,12 @@
    消すため実施保留（RFがmood再入力を許容するなら7日分の完全JSONを生成できる）`[要確認]`
 6. ~~7/9のデータ欠落~~ → 2026-07-27解消: `data/import/daily_gap_20260709-0720.json`
    （7/9・7/17〜20の5日分・HRV含む）を生成済み。iPhoneでの取込待ち
-8. （2026-07-27新規）`daily_gap_20260709-0720.json` と `auto_daily_latest.json`（7/21〜27）を
-   iPhoneで取込済みか。※7/21〜27はAirDrop済みの `daily_20260721-27.json` と同一内容のため
-   どちらか一方を1回だけ取り込む（二重取込は同一データなので実害はないが、mood入力後なら消える）
-9. （2026-07-27新規）iPhoneショートカット「ファイルを取得（iCloud rf-tracker/auto_daily_latest.json）
-   →クリップボードにコピー」をRFが作成したか
+8. ~~欠落分の取込~~ → 2026-07-29解消: 7/9〜7/28の13件はiPhone取込済み（RF確認済み・総193件）。
+   7/29の1件は `garmin_20260729.json` で取込待ち→完了したか要確認
+9. （2026-07-29新規）MacのiCloud Drive同期を7/27に初有効化した。それまで
+   `~/Library/Mobile Documents/com~apple~CloudDocs/` はローカル専用の張りぼてで、
+   有効化時にクラウド実体へ置換され旧ローカル配置物（rf-tracker・日報）は消えた→両方復元済み。
+   日報ビューアのiPhone閲覧（94_日報自動化）はこの有効化により初めて機能するようになった
 7. `docs/healthcare_baseline_doc_v1.md`・`docs/healthcare_v2_instructions.md`（未追跡）が
    公開配信対象の `docs/` 直下にある。個人情報を含むならpush前に `data/` 等へ移動 `[要確認]`
 
@@ -81,13 +82,17 @@
 - 取込は同一日付を**丸ごと置換**する（IndexedDB put）。既に日次取込済みの日付に
   null入りJSONを再取込すると mood・weight 等が消えるため、未取込の日付だけ取り込む
 
-### Garmin自動取得（2026-07-27構築・案A＝仕様§8変更なし）
+### Garmin自動取得（2026-07-27構築・07-29確定＝仕様§8変更なし）
 
 - 構成: `scripts/garmin_fetch.py`（venv: `.venv/`・非公式`garminconnect`ライブラリ）を
   launchd（`scripts/com.rf.rf-tracker.garmin.plist`→`~/Library/LaunchAgents/`）で毎朝9:30に実行
-  → sleep/rhr/bb/hrv を取得し `data/import/auto_daily_latest.json`（固定名上書き）と
-  iCloud Drive `rf-tracker/auto_daily_latest.json` に出力
-- iPhone側: ショートカット（iCloudのJSON→クリップボード）→アプリ取込タブでペースト→取込（約2タップ）
+  → sleep/rhr/bb/hrv を取得し `data/import/auto_daily_latest.json`（ローカル控え・固定名）と
+  iCloud Drive `rf-tracker/garmin_YYYYMMDD.json`（日付付き・旧日分は自動削除で常に1本）に出力
+- iPhone側（v1.2.0〜）: アプリ取込タブ →「ファイルから取込」→ iCloud Drive → rf-tracker →
+  当日のJSONを選択（選択と同時に取込まで実行される）
+- **iOSショートカット方式は3案とも不安定（ブックマーク失敗・Shortcutsフォルダ同期不達・
+  クリップボード空）のため2026-07-29に廃止**。iCloud配信ファイル名を日付付きにしたのは
+  iOSのピッカーが固定名の古い版を掴む事故の構造的排除のため
 - **重複取込によるmood・weight消失を防ぐため、前回生成日の翌日以降だけを出力する**
   （状態: `data/auto_fetch_state.json`。`--since` 指定時は状態を進めない＝検証・欠落追補用）
 - 認証: 初回のみ `scripts/garmin_auth.py` をTerminalで対話実行（トークンは `~/.garminconnect/`・
@@ -102,6 +107,7 @@
 
 | 事象 | 処理 |
 |---|---|
+| iPhoneにiCloudの新ファイルが出ない／中身が古い | Mac→iCloudの同期スタック（birdが「caught-up」と偽装するタイプ・2026-07-29発生）。`killall bird` でデーモン再起動→数分で復旧。RFは「同期詰まり」とClaudeに言えばよい |
 | 誤入力 | 同一日付のJSONを再取込 or 記録タブで上書き（置換される） |
 | 測定条件不一致の日 | 記録タブで「基準線から除外」をON |
 | 体調不良（sick） | confoundsにsickを付ければ基準線からは自動除外 |
