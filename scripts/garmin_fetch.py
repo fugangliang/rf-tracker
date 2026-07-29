@@ -25,10 +25,10 @@ TOKEN_DIR = os.path.expanduser("~/.garminconnect")
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 STATE_PATH = os.path.join(ROOT, "data", "auto_fetch_state.json")
 OUT_LOCAL = os.path.join(ROOT, "data", "import", "auto_daily_latest.json")
-# アプリの「ファイルから取込」が読む場所（iPhoneのファイルApp→iCloud Drive→rf-tracker）
-ICLOUD_OUT = os.path.expanduser(
-    "~/Library/Mobile Documents/com~apple~CloudDocs/rf-tracker/auto_daily_latest.json"
-)
+# アプリの「ファイルから取込」が読む場所（iPhoneのファイルApp→iCloud Drive→rf-tracker）。
+# ファイル名は日付付き（garmin_YYYYMMDD.json）。固定名はiOSピッカーが古い版を
+# 掴むことがあるため使わない。書き込み前に旧garmin_*.jsonを削除し常に1本だけ置く
+ICLOUD_DIR = os.path.expanduser("~/Library/Mobile Documents/com~apple~CloudDocs/rf-tracker")
 MAX_BACKFILL_DAYS = 28  # 状態ファイル欠損時の暴走防止
 
 
@@ -142,10 +142,14 @@ def main():
     os.makedirs(os.path.dirname(OUT_LOCAL), exist_ok=True)
     with open(OUT_LOCAL, "w") as f:
         f.write(payload)
-    os.makedirs(os.path.dirname(ICLOUD_OUT), exist_ok=True)
-    with open(ICLOUD_OUT, "w") as f:
+    os.makedirs(ICLOUD_DIR, exist_ok=True)
+    for old in os.listdir(ICLOUD_DIR):
+        if old.startswith("garmin_") and old.endswith(".json"):
+            os.remove(os.path.join(ICLOUD_DIR, old))
+    fname = f"garmin_{entries[-1]['date'].replace('-', '')}.json"
+    with open(os.path.join(ICLOUD_DIR, fname), "w") as f:
         f.write(payload)
-    log(f"出力: {len(entries)}件 → {OUT_LOCAL} / iCloud Drive")
+    log(f"出力: {len(entries)}件 → {OUT_LOCAL} / iCloud Drive {fname}")
 
     if not args.since:  # --since は検証・追補用のため状態を進めない
         with open(STATE_PATH, "w") as f:
