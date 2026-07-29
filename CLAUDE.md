@@ -12,6 +12,20 @@
 - 2026-07-16: 睡眠CSV（7/10〜7/16）から `data/daily_20260710-16.json` を生成し
   AirDropでRFに引き渡し（hrvは全件null。下記「Garmin書き出しCSV」節参照）
 
+### 最優先（2026-07-29中断時点・iCloud同期復旧の途中）
+
+birdの同期DBが7/27 16:38（iCloud Drive初有効化の瞬間）に破損し、Mac→iCloudの
+アップロードが全停止中（`brctl dump` の corrupted_db_info で確認済み。quota・ネットは正常）。
+iPhoneはトラッカーJSONの新版・日報HTML新版を受け取れない状態。復旧手順の途中で中断:
+
+1. RFがTerminal.appにフルディスクアクセス（FDA）を付与 →
+   `killall bird` → `mv ~/Library/Application\ Support/CloudDocs ~/Library/Application\ Support/CloudDocs.broken-20260729`
+2. bird再構築後の確認（Claude担当）: `brctl dump | grep corrupted` が消えること →
+   `brctl evict`→再DL のラウンドトリップで配信ファイルの実アップロードを確認
+3. iPhoneで `garmin_20260729.json`（7/29の1件入り）が見え、アプリ「ファイルから取込」→取込1件→総194件
+4. **作業完了後、TerminalのFDAをオフに戻すようRFにリマインドする（約束済み）**
+5. 復旧不能なら代替案B＝iMessage自分宛て自動配信（構築5分・RF合意済みの選択肢）に切替
+
 ### セッション再開時の確認事項（RF側の未確認2点＋繰越）
 
 1. iPhoneホーム画面版でv1.1表示（総合状態・信号チップ・コメント）が反映されたか
