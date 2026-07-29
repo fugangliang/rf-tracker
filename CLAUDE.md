@@ -1,5 +1,13 @@
 # CLAUDE.md — RF基準線トラッカーPWA
 
+## ステータス（2026-07-29夕時点）
+
+**2026-07-29午後: OMRON体組成の自動取得を構築・認証・実データ検証まで完了**（下記
+「OMRON自動取得」節）。**翌朝9:30（7/30）が初回実運用** — 次セッションで
+`data/auto_fetch.log` と iCloud配信ファイルに体組成が乗ったかを確認する。
+日常運用はClaude Code不要で自走する（launchd自動実行＋iPhone取込＋mood手入力のみ。
+Codeが要るのは例外時: トークン失効・API破損・同期詰まり・欠落追補・改修）。
+
 ## ステータス（2026-07-16時点）
 
 **運用フェーズ・v1.1**（受け入れ完了→アーティファクト版廃止→状態ヘッダー強化まで完了）。
@@ -12,22 +20,31 @@
 - 2026-07-16: 睡眠CSV（7/10〜7/16）から `data/daily_20260710-16.json` を生成し
   AirDropでRFに引き渡し（hrvは全件null。下記「Garmin書き出しCSV」節参照）
 
-### 最優先（2026-07-29中断時点・iCloud同期復旧の途中）
+### 最優先（2026-07-29午後・iCloud同期復旧＝Mac側完了）
 
-birdの同期DBが7/27 16:38（iCloud Drive初有効化の瞬間）に破損し、Mac→iCloudの
-アップロードが全停止中（`brctl dump` の corrupted_db_info で確認済み。quota・ネットは正常）。
-iPhoneはトラッカーJSONの新版・日報HTML新版を受け取れない状態。復旧手順の途中で中断:
+birdの同期DB破損（7/27 16:38発生）は2026-07-29に復旧完了:
+`killall bird` → CloudDocs を `CloudDocs.broken-20260729` に退避 → bird再構築 →
+`brctl dump` の corrupted 表示消滅を確認 → `garmin_20260729.json` の
+evict→再DLラウンドトリップで実アップロード・内容一致を確認済み。
+旧固定名の `auto_daily_latest.json`（iCloud側の残骸）は一度削除したが、
+**bird再構築時にクラウド実体から復活していた**（2026-07-29 14時台に発見）。
+中身は7/28生成分（7/9・7/17〜28の13件）で全件iPhone取込済みの残骸と確認済み。
+再削除はRF実行待ち（下記残タスク0）。
 
-1. RFがTerminal.appにフルディスクアクセス（FDA）を付与 →
-   `killall bird` → `mv ~/Library/Application\ Support/CloudDocs ~/Library/Application\ Support/CloudDocs.broken-20260729`
-2. bird再構築後の確認（Claude担当）: `brctl dump | grep corrupted` が消えること →
-   `brctl evict`→再DL のラウンドトリップで配信ファイルの実アップロードを確認
-3. iPhoneで `garmin_20260729.json`（7/29の1件入り）が見え、アプリ「ファイルから取込」→取込1件→総194件
-4. **作業完了後、TerminalのFDAをオフに戻すようRFにリマインドする（約束済み）**
-5. 復旧不能なら代替案B＝iMessage自分宛て自動配信（構築5分・RF合意済みの選択肢）に切替
+残タスク（RF側）:
+
+0. iCloud Drive/rf-tracker の `auto_daily_latest.json` を削除する
+   （Finder/ファイルAppどちらでも可。残しても実害は「古いファイルの誤取込リスク」のみ）
+1. iPhoneで `garmin_20260729.json`（7/29の1件入り）が見えること →
+   アプリ「ファイルから取込」→取込1件→総194件になることを確認
+2. **TerminalのFDAをオフに戻す**（システム設定→プライバシーとセキュリティ→
+   フルディスクアクセス→Terminalをオフ。Mac側作業は完了したのでもう不要）
+3. 数日安定運用を確認したら `~/Library/Application Support/CloudDocs.broken-20260729` を削除してよい
 
 ### セッション再開時の確認事項（RF側の未確認2点＋繰越）
 
+0. **（毎回）`data/auto_fetch_state.json` の `omronGaps` と `data/auto_fetch.log` を確認し、
+   OMRON体組成の取りこぼしがあればRFに手入力をリマインドする**（上記「取りこぼし検出」参照）
 1. iPhoneホーム画面版でv1.1表示（総合状態・信号チップ・コメント）が反映されたか
 2. 保全タブで目標体重を設定したか（未設定だと体重コメントに目標差が出ない）
 3. moodのn≥7到達後（7/14頃〜）、主観-客観乖離フラグの挙動に違和感がないか →「要確認（未決）」参照
@@ -116,6 +133,35 @@ iPhoneはトラッカーJSONの新版・日報HTML新版を受け取れない状
   **CSVの「Body Battery」列の正体は起床時値ではなく睡眠中回復量（sleep APIのbodyBatteryChange）**
 - 環境: venvはuv管理Python 3.12（システムPython 3.9では旧garthしか入らずSSO変更で401になる）。
   認証済み（2026-07-27）・launchd登録済み（`launchctl list | grep rf-tracker` で確認可）
+
+### OMRON自動取得（2026-07-29構築・認証済み・実データ検証済み）
+
+- 構成: `garmin_fetch.py` が Garmin取得後に OMRON connect クラウドから体組成
+  （weight/fat/muscle/visceral）を取得し、**同一日付のエントリにマージして1ファイル/日**で出力
+  （取込が同一日付を丸ごと置換する仕様のため、別ファイル配信は互いを消し合う＝禁止）
+- ライブラリ: 非公式 [omramin](https://github.com/bugficks/omramin)（コミットf6b6623固定・
+  2026-07-29に全4,695行監査済み＝悪意コードなし・通信先はOMRON公式クラウドのみ・
+  DEBUGログ無効なら認証情報漏出なし）。日本アカウントはAPI v1（data-jp.omronconnect.com）
+- 実装: `scripts/omron_client.py`（共通部）・`scripts/omron_auth.py`（初回対話認証）。
+  認証情報は `~/.omronconnect/config.json`（リフレッシュトークンのみ・パスワード非保存。
+  トークンは使用ごとにローテートされるため接続のたびに保存し直す実装）
+- **ライブラリのserialID→MAC往復変換にバグがあり**（`serial_to_mac`が末尾2バイトを落とす）、
+  素直に使うと測定が常に0件になる。APIの生deviceSerialIDを直接保持する自前実装で回避済み
+  （`omron_client._Device`・`list_scales`。2026-07-29に全期間200件の取得で検証、
+  体組成計はHBF-702T-JTBK）。omraminを更新する場合はこのバグの修正有無を確認する
+- 同一日に複数測定がある場合は**最後の測定を採用**（朝の測り直しを正とみなす）
+- 失敗時の挙動: 未認証・API失敗はログを残してGarmin分のみで続行（自動取得全体は止めない）。
+  トークン失効時は `scripts/omron_auth.py` をTerminalで再実行
+- **制約: 9:30の実行前に体重測定＋オムロンコネクトアプリへのBluetooth転送が済んでいる必要**。
+  9:30以降に測定した日は当日ファイルに体組成が乗らない（翌日以降も再出力されない＝状態管理上
+  その日は消費済み）。その日の体重は従来どおり記録タブで手入力するか、スクショ→claude.ai抽出
+- **取りこぼし検出（2026-07-29追加・RFへのリマインド約束済み）**: 毎朝の実行時に直近7日を
+  遡り、「配信済みの過去日に遅れて測定が届いた日」を検出して `data/auto_fetch_state.json` の
+  `omronGaps` とログ（`data/auto_fetch.log`）に記録する。**セッション再開時にClaudeは
+  omronGaps を必ず確認し、取りこぼしがあればRFに手入力をリマインドする。多発するようなら
+  アプリ取込の「nullでないフィールドだけ更新」マージ方式化（運用ルール変更・要RF判断）を提案する**。
+  注意: `--since` での手動再生成分は omronDates に記録されないため誤検出があり得る（実害は
+  リマインドが1回余計に出るだけ）
 
 ### 例外時の処理
 

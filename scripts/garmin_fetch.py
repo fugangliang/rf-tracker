@@ -1,10 +1,14 @@
 #!/usr/bin/env python3
-"""Garmin Connectから日次データ（sleep/rhr/bb/hrv）を取得し、アプリ取込用JSONを生成する。
+"""Garmin Connect＋OMRON connectから日次データを取得し、アプリ取込用JSONを生成する。
 
+- Garmin: sleep/rhr/bb/hrv、OMRON: weight/fat/muscle/visceral（体組成）。
+  取込が同一日付を丸ごと置換する仕様のため、両者を同一エントリにマージして
+  1ファイル/日で出力する（別ファイルにすると互いのデータを消し合う）
+- OMRONは未認証・取得失敗時はスキップしGarmin分のみで続行する（omron_client.py参照）
 - 前回生成した日の翌日〜今日だけを出力する（状態: data/auto_fetch_state.json）。
-  同一日付の再取込はmood・weight等を消すため、重複出力を構造的に避ける設計。
+  同一日付の再取込はmood等を消すため、重複出力を構造的に避ける設計。
 - 出力先: data/import/auto_daily_latest.json（固定名・上書き）と
-  iCloud Drive の rf-tracker/auto_daily_latest.json（iPhoneショートカットが読む）
+  iCloud Drive の rf-tracker/garmin_YYYYMMDD.json（アプリ「ファイルから取込」が読む）
 - 列マッピングはCSV運用（CLAUDE.md 2026-07-16確定）と同一:
   睡眠スコア→sleep / 安静時心拍→rhr / bodyBatteryChange→bb / 夜間HRV→hrv
   （CSVの「Body Battery」列＝睡眠中の回復量＝sleep APIのbodyBatteryChange。
@@ -30,6 +34,8 @@ OUT_LOCAL = os.path.join(ROOT, "data", "import", "auto_daily_latest.json")
 # 掴むことがあるため使わない。書き込み前に旧garmin_*.jsonを削除し常に1本だけ置く
 ICLOUD_DIR = os.path.expanduser("~/Library/Mobile Documents/com~apple~CloudDocs/rf-tracker")
 MAX_BACKFILL_DAYS = 28  # 状態ファイル欠損時の暴走防止
+OMRON_TRACK_START = "2026-07-30"  # 自動化開始日。これ以前の測定は取りこぼし判定の対象外
+OMRON_LOOKBACK_DAYS = 7  # 取りこぼし検出の遡り日数（これを過ぎた未配信日は検出から外れる）
 
 
 def log(msg):
@@ -73,6 +79,43 @@ def fetch_hrv(api, d):
     return (js.get("hrvSummary") or {}).get("lastNightAvg")
 
 
+def merge_omron(entries_by_date, start, today, prev_delivered):
+    """OMRON connectから体組成（weight/fat/muscle/visceral）を取得し同一日付にマージする。
+
+    未認証・取得失敗時はログを残してGarmin分のみで続行する（自動取得全体を止めない）。
+    あわせて取りこぼし（配信済みの過去日に遅れて測定が届いた＝Bluetooth転送が
+    9:30に間に合わなかった日）を検出する。過去日の再配信はmood等を消すためしない。
+    返り値: (今回体組成を配信した日付list, 取りこぼし日付list)
+    """
+    import omron_client
+
+    cfg = omron_client.load_config()
+    if not cfg:
+        log("OMRON: 未認証のためスキップ（有効化は scripts/omron_auth.py をTerminalで実行）")
+        return [], []
+    try:
+        oc = omron_client.connect(cfg)
+        lookback = start - datetime.timedelta(days=OMRON_LOOKBACK_DAYS)
+        daily = omron_client.fetch_daily(oc, omron_client.to_device(cfg), lookback, today)
+    except Exception as e:
+        log(f"OMRON: 取得失敗のため体組成なしで続行（続くなら要再認証: scripts/omron_auth.py）: {e}")
+        return [], []
+    delivered = []
+    for ds, vals in sorted(daily.items()):
+        if ds >= start.isoformat():
+            e = entries_by_date.setdefault(ds, empty_entry(ds))
+            e.update(vals)
+            delivered.append(ds)
+            log(f"  {ds}: OMRON {vals}")
+    if not delivered:
+        log("OMRON: 対象期間の測定なし")
+    gaps = [ds for ds in sorted(daily)
+            if OMRON_TRACK_START <= ds < start.isoformat() and ds not in prev_delivered]
+    if gaps:
+        log(f"OMRON: 取りこぼし{len(gaps)}日分 {gaps} → 記録タブで手入力が必要")
+    return delivered, gaps
+
+
 def load_state():
     try:
         with open(STATE_PATH) as f:
@@ -94,10 +137,11 @@ def main():
         sys.exit(0)  # launchd常駐時にエラー扱いにしない
 
     today = datetime.date.today()
+    state = load_state()
     if args.since:
         start = datetime.date.fromisoformat(args.since)
     else:
-        last = load_state().get("lastDate")
+        last = state.get("lastDate")
         start = (datetime.date.fromisoformat(last) + datetime.timedelta(days=1)
                  if last else today - datetime.timedelta(days=6))
         start = max(start, today - datetime.timedelta(days=MAX_BACKFILL_DAYS))
@@ -113,7 +157,7 @@ def main():
         sys.exit(0)  # launchd常駐時にエラー扱いにしない
     log(f"取得範囲: {start} 〜 {today}")
 
-    entries = []
+    entries_by_date = {}
     d = start
     while d <= today:
         ds = d.isoformat()
@@ -124,11 +168,15 @@ def main():
         e["hrv"] = safe(fetch_hrv, api, ds)
         got = {k: e[k] for k in ("sleep", "rhr", "hrv", "bb")}
         if any(v is not None for v in got.values()):
-            entries.append(e)
+            entries_by_date[ds] = e
             log(f"  {ds}: {got}")
         else:
-            log(f"  {ds}: データなし（スキップ）")
+            log(f"  {ds}: Garminデータなし")
         d += datetime.timedelta(days=1)
+
+    delivered, gaps = merge_omron(entries_by_date, start, today,
+                                  set(state.get("omronDates", [])))
+    entries = [entries_by_date[ds] for ds in sorted(entries_by_date)]
 
     if not entries:
         log("取得できた日がないため出力なし")
@@ -152,8 +200,12 @@ def main():
     log(f"出力: {len(entries)}件 → {OUT_LOCAL} / iCloud Drive {fname}")
 
     if not args.since:  # --since は検証・追補用のため状態を進めない
+        # omronDates=体組成を配信済みの日付（取りこぼし誤検出の防止用・直近60日分）。
+        # omronGaps=現在の取りこぼし。セッション再開時にClaudeが確認しRFにリマインドする
+        omron_dates = sorted(set(state.get("omronDates", [])) | set(delivered))[-60:]
         with open(STATE_PATH, "w") as f:
-            json.dump({"lastDate": entries[-1]["date"]}, f)
+            json.dump({"lastDate": entries[-1]["date"],
+                       "omronDates": omron_dates, "omronGaps": gaps}, f)
 
 
 if __name__ == "__main__":

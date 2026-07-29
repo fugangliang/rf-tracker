@@ -6,3 +6,4 @@ docs_requirements_v1.md
 rf-tracker-export_*.json
 .DS_Store
 .venv/
+__pycache__/
