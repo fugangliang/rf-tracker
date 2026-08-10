@@ -187,6 +187,7 @@ evict→再DLラウンドトリップで実アップロード・内容一致を�
 | 事象 | 処理 |
 |---|---|
 | iPhoneにiCloudの新ファイルが出ない／中身が古い | Mac→iCloudの同期スタック（birdが「caught-up」と偽装するタイプ・2026-07-29発生）。`killall bird` でデーモン再起動→数分で復旧。RFは「同期詰まり」とClaudeに言えばよい |
+| ↑で直らない（`brctl status` で特定ファイルに ul-error CKErrorDomain:6 ＋ NSCocoaErrorDomain:4099） | **レコード単位の毒化**（2026-08-10発生）。bird/cloudd再起動では回復しない。新規レコードは正常に同期するため、**同フォルダに別名でコピーを置けば数分で届く**（例: `garmin_YYYYMMDD_retry.json`）。毒化レコード自体は放置でよい（新規同期を妨げない。翌朝のスクリプトが旧garmin_*を削除する）。多発時はCloudDocs再構築（07-29手順）を検討 |
 | 誤入力 | 同一日付のJSONを再取込 or 記録タブで上書き（置換される） |
 | 測定条件不一致の日 | 記録タブで「基準線から除外」をON |
 | 体調不良（sick） | confoundsにsickを付ければ基準線からは自動除外 |
