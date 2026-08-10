@@ -137,9 +137,13 @@
   }
 
   /* §4.6 インポート: 単一オブジェクトまたは配列。日付昇順処理。エラー行スキップ。
-   * existingEntries: DB内の既存エントリ（浮腫検出の前日参照に使用）。
+   * existingEntries: DB内の既存エントリ（浮腫検出の前日参照とマージ元に使用）。
+   * opts.merge: trueなら既存エントリと項目単位でマージ（2026-08-10改訂・取込タブの既定）。
+   *   数値フィールドは非nullのみ上書き、confounds/noteは空なら既存保持、
+   *   excludeBaseline/edemaはOR。フィールドの消去はマージでは不可＝記録タブ（置換）で行う。
    * 返り値: { entries: 正規化済みエントリ[], errors: [{index, date, reason}], edemaDetected: [date] } */
-  function parseImport(jsonText, existingEntries) {
+  function parseImport(jsonText, existingEntries, opts) {
+    const merge = !!(opts && opts.merge);
     let data;
     try {
       data = JSON.parse(jsonText);
@@ -181,17 +185,25 @@
       rows.push(e);
     });
 
-    // 日付昇順に処理（浮腫自動検出が前日値に依存）。同一dateは上書き（後勝ち・置換）
+    // 日付昇順に処理（浮腫自動検出が前日値に依存）。マージは浮腫検出より前に適用
     rows.sort((a, b) => a.date < b.date ? -1 : a.date > b.date ? 1 : 0);
     const map = new Map((existingEntries || []).map(e => [e.date, e]));
     const edemaDetected = [];
     for (const e of rows) {
+      if (merge && map.has(e.date)) {
+        const old = map.get(e.date);
+        for (const f of NUMERIC_FIELDS) { if (e[f] === null) e[f] = old[f] ?? null; }
+        if (e.confounds.length === 0) e.confounds = old.confounds || [];
+        e.excludeBaseline = e.excludeBaseline || old.excludeBaseline === true;
+        e.edema = e.edema || old.edema === true;
+        if (e.note === '') e.note = typeof old.note === 'string' ? old.note : '';
+      }
       const prior = [...map.values()];
       if (!e.edema && detectEdema(prior, e)) {
         e.edema = true;
         edemaDetected.push(e.date);
       }
-      map.set(e.date, e); // 置換（マージではない）
+      map.set(e.date, e);
     }
     const entries = rows; // 正規化済み・昇順（同一date重複は後で置換適用側が処理）
     return { entries, errors, edemaDetected };

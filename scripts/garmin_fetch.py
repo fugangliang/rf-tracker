@@ -5,8 +5,11 @@
   取込が同一日付を丸ごと置換する仕様のため、両者を同一エントリにマージして
   1ファイル/日で出力する（別ファイルにすると互いのデータを消し合う）
 - OMRONは未認証・取得失敗時はスキップしGarmin分のみで続行する（omron_client.py参照）
-- 前回生成した日の翌日〜今日だけを出力する（状態: data/auto_fetch_state.json）。
-  同一日付の再取込はmood等を消すため、重複出力を構造的に避ける設計。
+- 常に直近7日分（今日を含む）を出力する（2026-08-10改訂・ローリング方式）。
+  アプリ側取込がマージ方式（非nullのみ更新・v1.3.0〜）になったため重複配信は安全。
+  取込を数日飛ばしても次の1回で追いつき、時計未同期・OMRON転送遅れの日も
+  7日以内なら翌日以降の再配信で自動的に埋まる。
+  状態（data/auto_fetch_state.json）はOMRON取りこぼし検出と観測用に維持。
 - 出力先: data/import/auto_daily_latest.json（固定名・上書き）と
   iCloud Drive の rf-tracker/garmin_YYYYMMDD.json（アプリ「ファイルから取込」が読む）
 - 列マッピングはCSV運用（CLAUDE.md 2026-07-16確定）と同一:
@@ -15,7 +18,7 @@
     2026-07-27にCSV実績値7日分と突合し全一致を確認済み）
 
 実行例:
-  garmin_fetch.py                      # 通常運用（前回以降〜今日）
+  garmin_fetch.py                      # 通常運用（直近7日〜今日のローリング窓）
   garmin_fetch.py --since 2026-07-21   # 日付指定で再生成（検証・欠落追補用。状態は更新しない）
   garmin_fetch.py --stdout             # ファイルを書かず内容表示のみ
 """
@@ -33,7 +36,7 @@ OUT_LOCAL = os.path.join(ROOT, "data", "import", "auto_daily_latest.json")
 # ファイル名は日付付き（garmin_YYYYMMDD.json）。固定名はiOSピッカーが古い版を
 # 掴むことがあるため使わない。書き込み前に旧garmin_*.jsonを削除し常に1本だけ置く
 ICLOUD_DIR = os.path.expanduser("~/Library/Mobile Documents/com~apple~CloudDocs/rf-tracker")
-MAX_BACKFILL_DAYS = 28  # 状態ファイル欠損時の暴走防止
+WINDOW_DAYS = 7  # 通常運用の出力窓（今日を含む直近7日。マージ取込前提で重複配信は安全）
 OMRON_TRACK_START = "2026-07-30"  # 自動化開始日。これ以前の測定は取りこぼし判定の対象外
 OMRON_LOOKBACK_DAYS = 7  # 取りこぼし検出の遡り日数（これを過ぎた未配信日は検出から外れる）
 
@@ -83,8 +86,9 @@ def merge_omron(entries_by_date, start, today, prev_delivered):
     """OMRON connectから体組成（weight/fat/muscle/visceral）を取得し同一日付にマージする。
 
     未認証・取得失敗時はログを残してGarmin分のみで続行する（自動取得全体を止めない）。
-    あわせて取りこぼし（配信済みの過去日に遅れて測定が届いた＝Bluetooth転送が
-    9:30に間に合わなかった日）を検出する。過去日の再配信はmood等を消すためしない。
+    ローリング7日配信＋マージ取込（v1.3.0〜）により、Bluetooth転送が9:30に
+    間に合わなかった日も7日以内なら翌日以降の再配信で自動的に埋まる。
+    取りこぼし検出は「7日窓を過ぎてから届いた測定」だけを拾う安全網として維持。
     返り値: (今回体組成を配信した日付list, 取りこぼし日付list)
     """
     import omron_client
@@ -141,13 +145,7 @@ def main():
     if args.since:
         start = datetime.date.fromisoformat(args.since)
     else:
-        last = state.get("lastDate")
-        start = (datetime.date.fromisoformat(last) + datetime.timedelta(days=1)
-                 if last else today - datetime.timedelta(days=6))
-        start = max(start, today - datetime.timedelta(days=MAX_BACKFILL_DAYS))
-    if start > today:
-        log("新規日付なし（本日分は生成済み）")
-        return
+        start = today - datetime.timedelta(days=WINDOW_DAYS - 1)
 
     api = Garmin()
     try:

@@ -207,6 +207,40 @@ console.log('5. コアロジック単体検証');
   }
 }
 
+// 5.7 マージ取込（2026-08-10改訂・取込タブの既定動作）
+{
+  const existing = [{
+    date: '2026-08-01', hrv: 40, rhr: 55, sleep: 80, bb: 70,
+    weight: 88.0, mood: 4, fat: 26.0, muscle: 31.0, visceral: 10,
+    confounds: ['golf'], excludeBaseline: false, edema: false, note: '手入力メモ'
+  }];
+  const incoming = JSON.stringify([{
+    date: '2026-08-01', hrv: 42, rhr: null, sleep: 82, bb: null,
+    weight: null, mood: null, fat: null, muscle: null, visceral: null,
+    confounds: [], excludeBaseline: false, edema: false, note: ''
+  }]);
+  const rm = L.parseImport(incoming, existing, { merge: true });
+  const m = rm.entries[0];
+  check('マージ: 非null値は上書き（hrv 40→42, sleep 80→82）', m.hrv === 42 && m.sleep === 82);
+  check('マージ: null値は既存保持（rhr=55, bb=70）', m.rhr === 55 && m.bb === 70);
+  check('マージ: mood・体組成の手入力を保全', m.mood === 4 && m.weight === 88.0 && m.fat === 26.0 && m.muscle === 31.0 && m.visceral === 10);
+  check('マージ: 空confounds・空noteは既存保持', m.confounds.length === 1 && m.confounds[0] === 'golf' && m.note === '手入力メモ');
+  const rr = L.parseImport(incoming, existing); // オプションなし＝従来の置換
+  const p = rr.entries[0];
+  check('置換（既定オプションなし）: 従来どおり丸ごと差し替え', p.rhr === null && p.mood === null && p.weight === null && p.confounds.length === 0);
+  const rf = L.parseImport(JSON.stringify([{ date: '2026-08-01', excludeBaseline: true, edema: true }]), existing, { merge: true });
+  check('マージ: excludeBaseline/edemaはOR（trueが残る）', rf.entries[0].excludeBaseline === true && rf.entries[0].edema === true);
+  const rf2 = L.parseImport(incoming, [{ ...existing[0], excludeBaseline: true, edema: true }], { merge: true });
+  check('マージ: 既存trueフラグはincoming falseで消えない', rf2.entries[0].excludeBaseline === true && rf2.entries[0].edema === true);
+  const rn = L.parseImport(JSON.stringify([{ date: '2026-08-02', hrv: 44 }]), existing, { merge: true });
+  check('マージ: 既存にない日付は新規としてそのまま入る', rn.entries[0].date === '2026-08-02' && rn.entries[0].hrv === 44 && rn.entries[0].mood === null);
+  // マージ後の値で浮腫検出が働くこと（既存の体組成＋当日のweightだけ来た場合は3値が揃い検出対象になる）
+  const prior = [{ date: '2026-07-31', weight: 88.0, fat: 26.0, muscle: 31.0, confounds: [], excludeBaseline: false, edema: false, note: '' }];
+  const ex2 = prior.concat([{ date: '2026-08-01', weight: null, fat: 25.5, muscle: 31.5, hrv: null, rhr: null, sleep: null, bb: null, mood: null, visceral: null, confounds: [], excludeBaseline: false, edema: false, note: '' }]);
+  const re = L.parseImport(JSON.stringify([{ date: '2026-08-01', weight: 88.5 }]), ex2, { merge: true });
+  check('マージ: マージ後の3値で浮腫シグネチャ検出', re.entries[0].edema === true && re.edemaDetected.includes('2026-08-01'));
+}
+
 if (HAS_DATA) {
   const entries2 = all();
   console.log('6. 状態ヘッダー全文（2026-07-08・目視確認用）');

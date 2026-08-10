@@ -207,9 +207,10 @@ async function renderImport() {
   view().innerHTML = `<div class="card">
     <h2>JSONインポート（日次運用の主入口）</h2>
     <button class="btn" id="import-file-btn">ファイルから取込</button>
-    <p class="muted">毎朝の自動生成分: iCloud Drive → rf-tracker → auto_daily_latest.json を選択</p>
+    <p class="muted">毎朝の自動生成分: iCloud Drive → rf-tracker → garmin_日付.json を選択（直近7日分入り。取込済みの日は空欄以外だけ更新されるため、毎日取り込まなくても次の1回で追いつく）</p>
     <textarea id="import-text" placeholder='[{"date":"2026-07-08","hrv":34,...}] をペースト'></textarea>
     <button class="btn" id="import-btn">取込</button>
+    <label style="display:block;margin-top:8px"><input type="checkbox" id="import-replace">完全置換で取込（機種変更・復元用。既存の同一日付を丸ごと差し替える）</label>
     <div class="result" id="import-result"></div>
   </div>`;
   $('#import-btn').addEventListener('click', doImport);
@@ -232,10 +233,13 @@ async function doImport() {
   out.textContent = ''; // 前回結果を消してから処理（取り違え防止）
   if (!text) { out.textContent = 'JSONをペーストしてください'; out.className = 'result err'; return; }
   const existing = await getAllEntries();
-  const res = L.parseImport(text, existing);
+  const replace = $('#import-replace') && $('#import-replace').checked;
+  const res = L.parseImport(text, existing, { merge: !replace });
   if (res.entries.length) await putEntries(res.entries);
+  const existingDates = new Set(existing.map(e => e.date));
+  const added = res.entries.filter(e => !existingDates.has(e.date)).length;
   const lines = [];
-  lines.push(`取込 ${res.entries.length}件${res.errors.length ? ` / エラー ${res.errors.length}件` : ''}`);
+  lines.push(`取込 ${res.entries.length}件（新規${added}・${replace ? '置換' : '更新'}${res.entries.length - added}）${res.errors.length ? ` / エラー ${res.errors.length}件` : ''}`);
   if (res.edemaDetected.length) lines.push(`浮腫シグネチャ自動検出: ${res.edemaDetected.join(', ')}（体重↑・体脂肪率↓・骨格筋率↑）`);
   for (const err of res.errors) lines.push(`✗ ${err.date ?? `行${err.index !== null ? err.index + 1 : '?'}`}: ${err.reason}`);
   out.textContent = lines.join('\n');
