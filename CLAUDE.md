@@ -53,8 +53,7 @@ evict→再DLラウンドトリップで実アップロード・内容一致を�
 
 残タスク（RF側）:
 
-0. iCloud Drive/rf-tracker の `auto_daily_latest.json` を削除する
-   （Finder/ファイルAppどちらでも可。残しても実害は「古いファイルの誤取込リスク」のみ）
+0. ~~iCloud Drive/rf-tracker の `auto_daily_latest.json` を削除する~~ → 2026-08-10 Mac側で削除済み
 1. iPhoneで `garmin_20260729.json`（7/29の1件入り）が見えること →
    アプリ「ファイルから取込」→取込1件→総194件になることを確認
 2. **TerminalのFDAをオフに戻す**（システム設定→プライバシーとセキュリティ→
