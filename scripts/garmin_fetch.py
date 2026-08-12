@@ -192,7 +192,9 @@ def main():
     for old in os.listdir(ICLOUD_DIR):
         if old.startswith("garmin_") and old.endswith(".json"):
             os.remove(os.path.join(ICLOUD_DIR, old))
-    fname = f"garmin_{entries[-1]['date'].replace('-', '')}.json"
+    # ファイル名は実行日基準（最終エントリ日基準だと当日データ未同期の日に古い日付へ
+    # 退行し、iOSピッカーでの取り違えや旧名レコードへの上書きが起きる。2026-08-11発生）
+    fname = f"garmin_{today.isoformat().replace('-', '')}.json"
     with open(os.path.join(ICLOUD_DIR, fname), "w") as f:
         f.write(payload)
     log(f"出力: {len(entries)}件 → {OUT_LOCAL} / iCloud Drive {fname}")
