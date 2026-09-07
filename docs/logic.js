@@ -10,7 +10,8 @@
   // 旧JSON（キーなし）はnull扱いで受理、旧アプリは未知キーを無視するため双方向に安全
   // v1.6.0: stress（Garmin日中平均ストレス 0-100・低いほど良い）・stressHighMin（高ストレス時間 分）を追加
   const NUMERIC_FIELDS = ['hrv', 'rhr', 'sleep', 'bb', 'weight', 'mood', 'fat', 'muscle', 'visceral',
-    'steps', 'kcalOut', 'kcalActive', 'kcalIn', 'protein', 'stress', 'stressHighMin'];
+    'steps', 'kcalOut', 'kcalActive', 'kcalIn', 'protein', 'stress', 'stressHighMin',
+    'bedHour', 'sleepHrs']; // v1.6.1: 就寝時刻（24h表記の小数時・0:30就寝=24.5）・睡眠時間（h）
   const CONFOUNDS = ['alcohol', 'golf', 'travel', 'sick'];
   const IGNORED_KEYS = ['deep', 'water']; // v1.0旧スキーマ互換: 無視して受理
   const BASELINE_DAYS = 28;
@@ -223,6 +224,7 @@
       steps: e.steps ?? null, kcalOut: e.kcalOut ?? null, kcalActive: e.kcalActive ?? null,
       kcalIn: e.kcalIn ?? null, protein: e.protein ?? null,
       stress: e.stress ?? null, stressHighMin: e.stressHighMin ?? null,
+      bedHour: e.bedHour ?? null, sleepHrs: e.sleepHrs ?? null,
       confounds: e.confounds,
       excludeBaseline: e.excludeBaseline, edema: e.edema, note: e.note
     }));
@@ -440,12 +442,13 @@
     lines.push(`消費kcal(Garmin推定): ${fmt(avg('kcalOut'), 0)} / 活動kcal: ${fmt(avg('kcalActive'), 0)}`);
     lines.push(`摂取kcal: ${fmt(avg('kcalIn'), 0)} / タンパク質: ${fmt(avg('protein'), 0)} g`);
     lines.push(`ストレス平均: ${fmt(avg('stress'), 0)} / 高ストレス: ${fmt(avg('stressHighMin'), 0)} 分/日`);
+    lines.push(`就寝時刻: ${fmt(avg('bedHour'), 2)} 時 / 睡眠時間: ${fmt(avg('sleepHrs'), 2)} h`);
     lines.push(`交絡: ` + CONFOUNDS.map(c => `${c} ${confCount[c]}日`).join(' / '));
     lines.push(`浮腫検出: ${inMonth.filter(e => e.edema).length}日 / 基準線除外: ${inMonth.filter(e => isExcludedFromBaseline(e)).length}日`);
     lines.push('');
     lines.push('--- TSV（スプレッドシート転記用） ---');
     const cols = ['date', 'hrv', 'rhr', 'sleep', 'bb', 'weight', 'mood', 'fat', 'muscle', 'visceral',
-      'steps', 'kcalOut', 'kcalActive', 'kcalIn', 'protein', 'stress', 'stressHighMin', 'confounds', 'excludeBaseline', 'edema', 'note'];
+      'steps', 'kcalOut', 'kcalActive', 'kcalIn', 'protein', 'stress', 'stressHighMin', 'bedHour', 'sleepHrs', 'confounds', 'excludeBaseline', 'edema', 'note'];
     lines.push(cols.join('\t'));
     for (const e of inMonth) {
       lines.push(cols.map(c => {

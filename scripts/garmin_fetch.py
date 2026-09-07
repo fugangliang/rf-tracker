@@ -60,6 +60,7 @@ def empty_entry(date):
         "steps": None, "kcalOut": None, "kcalActive": None,  # Garmin活動量（v1.4.0）
         "kcalIn": None, "protein": None,  # Garmin Connect+ 栄養トラッキング（食事ログなしはNone）
         "stress": None, "stressHighMin": None,  # Garmin 日中ストレス（v1.6.0・負荷の代理変数）
+        "bedHour": None, "sleepHrs": None,  # 就寝時刻（0:30=24.5）・睡眠時間h（v1.6.1・当日分も出す）
         "confounds": [], "excludeBaseline": False, "edema": False, "note": "",
     }
 
@@ -74,11 +75,47 @@ def safe(fn, *args):
 
 
 def fetch_sleep(api, d):
-    """睡眠スコアと bodyBatteryChange（睡眠中BB回復量＝CSVのBody Battery列と同一）"""
+    """睡眠スコア・bodyBatteryChange（睡眠中BB回復量）・就寝時刻（小数時・24時以降は+24）・睡眠時間h"""
     js = api.get_sleep_data(d) or {}
     dto = js.get("dailySleepDTO") or {}
     score = ((dto.get("sleepScores") or {}).get("overall") or {}).get("value")
-    return score, js.get("bodyBatteryChange")
+    bed_hour = sleep_hrs = None
+    start_local = dto.get("sleepStartTimestampLocal")  # ローカル時刻をUTCエポックとして表現したms
+    if isinstance(start_local, (int, float)) and start_local > 0:
+        t = datetime.datetime.fromtimestamp(start_local / 1000, tz=datetime.timezone.utc)
+        h = t.hour + t.minute / 60
+        bed_hour = round(h + 24 if h < 12 else h, 2)
+    secs = dto.get("sleepTimeSeconds")
+    if isinstance(secs, (int, float)) and secs > 0:
+        sleep_hrs = round(secs / 3600, 2)
+    return score, js.get("bodyBatteryChange"), bed_hour, sleep_hrs
+
+
+NUTRITION_DIR = os.path.join(ROOT, "data", "nutrition")
+
+
+def save_nutrition_detail(api, d):
+    """前日以前の食事内訳（食事ごとのkcal/PFC・品名）をMacローカルに保存（アドバイス生成の文脈用・配信しない）"""
+    js = api.get_nutrition_daily_food_log(d) or {}
+    meals = []
+    for md in js.get("mealDetails") or []:
+        c = md.get("mealNutritionContent") or {}
+        foods = [(f.get("foodMetaData") or {}).get("foodName") for f in md.get("loggedFoods") or []]
+        foods = [x for x in foods if x]
+        if not foods and not c.get("calories"):
+            continue
+        meals.append({"name": (md.get("meal") or {}).get("mealName"), "calories": c.get("calories"),
+                      "protein": c.get("protein"), "fat": c.get("fat"), "carbs": c.get("carbs"), "foods": foods})
+    if not meals:
+        return False
+    tot = js.get("dailyNutritionContent") or {}
+    goals = js.get("dailyNutritionGoals") or {}
+    os.makedirs(NUTRITION_DIR, exist_ok=True)
+    with open(os.path.join(NUTRITION_DIR, f"{d}.json"), "w") as f:
+        json.dump({"date": d, "meals": meals,
+                   "total": {k: tot.get(k) for k in ("calories", "protein", "fat", "carbs")},
+                   "goals": {k: goals.get(k) for k in ("calories", "protein")}}, f, ensure_ascii=False)
+    return True
 
 
 def fetch_rhr(api, d):
@@ -196,7 +233,7 @@ def main():
     while d <= today:
         ds = d.isoformat()
         e = empty_entry(ds)
-        e["sleep"], e["bb"] = safe(fetch_sleep, api, ds) or (None, None)
+        e["sleep"], e["bb"], e["bedHour"], e["sleepHrs"] = safe(fetch_sleep, api, ds) or (None, None, None, None)
         rhr = safe(fetch_rhr, api, ds)
         e["rhr"] = int(round(rhr)) if rhr is not None else None  # APIはfloatで返す
         e["hrv"] = safe(fetch_hrv, api, ds)
@@ -204,7 +241,8 @@ def main():
             e["steps"], e["kcalOut"], e["kcalActive"], e["stress"], e["stressHighMin"] = \
                 safe(fetch_activity, api, ds) or (None, None, None, None, None)
             e["kcalIn"], e["protein"] = safe(fetch_nutrition, api, ds) or (None, None)
-        got = {k: e[k] for k in ("sleep", "rhr", "hrv", "bb", "steps", "kcalOut", "kcalActive", "kcalIn", "protein", "stress", "stressHighMin")}
+            safe(save_nutrition_detail, api, ds)
+        got = {k: e[k] for k in ("sleep", "rhr", "hrv", "bb", "bedHour", "sleepHrs", "steps", "kcalOut", "kcalActive", "kcalIn", "protein", "stress", "stressHighMin")}
         if any(v is not None for v in got.values()):
             entries_by_date[ds] = e
             log(f"  {ds}: {got}")

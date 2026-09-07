@@ -31,7 +31,8 @@ QR_PATH = os.path.join(ROOT, "data", "sync_setup_qr.png")
 REPO = "fugangliang/rf-tracker-data"
 ENC_FILE = "data.enc"
 NUMERIC_FIELDS = ["hrv", "rhr", "sleep", "bb", "weight", "mood", "fat", "muscle", "visceral",
-                  "steps", "kcalOut", "kcalActive", "kcalIn", "protein", "stress", "stressHighMin"]
+                  "steps", "kcalOut", "kcalActive", "kcalIn", "protein", "stress", "stressHighMin",
+                  "bedHour", "sleepHrs"]
 
 
 def b64url(b):

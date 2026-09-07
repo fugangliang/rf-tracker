@@ -1,7 +1,7 @@
 /* RF基準線トラッカー UI＋永続化（IndexedDB）。ロジックは logic.js(RFLogic) に集約。v1.4.0: 減量タブ追加、v1.5.0: 自動同期(sync.js) */
 'use strict';
 const L = RFLogic;
-const APP_VERSION = '1.6.0'; // sw.js の VERSION と揃える（保全タブに表示・更新確認用）
+const APP_VERSION = '1.6.1'; // sw.js の VERSION と揃える（保全タブに表示・更新確認用）
 
 /* ================= IndexedDB ================= */
 const DB_NAME = 'rf-tracker', DB_VER = 1;
@@ -292,6 +292,8 @@ async function renderRecord(dateArg) {
       <label class="field">タンパク質 (g)<input type="number" step="any" id="f-protein" value="${v('protein')}"></label>
       <label class="field">ストレス平均 (0-100)<input type="number" step="any" id="f-stress" value="${v('stress')}"></label>
       <label class="field">高ストレス (分)<input type="number" step="any" id="f-stresshigh" value="${v('stressHighMin')}"></label>
+      <label class="field">就寝時刻 (時・0:30=24.5)<input type="number" step="any" id="f-bedhour" value="${v('bedHour')}"></label>
+      <label class="field">睡眠時間 (h)<input type="number" step="any" id="f-sleephrs" value="${v('sleepHrs')}"></label>
     </div>
     <label class="field">寝起きの気分（1〜5）</label>
     <div class="mood-btns" id="f-mood">
@@ -334,6 +336,7 @@ async function renderRecord(dateArg) {
       steps: num('#f-steps'), kcalOut: num('#f-kcalout'), kcalActive: num('#f-kcalactive'),
       kcalIn: num('#f-kcalin'), protein: num('#f-protein'),
       stress: num('#f-stress'), stressHighMin: num('#f-stresshigh'),
+      bedHour: num('#f-bedhour'), sleepHrs: num('#f-sleephrs'),
       confounds: [...document.querySelectorAll('.check-row input[data-c]')].filter(c => c.checked).map(c => c.dataset.c),
       excludeBaseline: $('#f-exclude').checked,
       edema: $('#f-edema').checked,
@@ -363,6 +366,7 @@ const TREND_METRICS = [
   { key: 'fat', name: '体脂肪率' }, { key: 'muscle', name: '骨格筋率' },
   { key: 'steps', name: '歩数' }, { key: 'kcalIn', name: '摂取kcal' }, { key: 'kcalOut', name: '消費kcal' },
   { key: 'stress', name: 'ストレス平均' }, { key: 'stressHighMin', name: '高ストレス(分)' },
+  { key: 'bedHour', name: '就寝時刻' }, { key: 'sleepHrs', name: '睡眠時間' },
 ];
 let trendState = { metric: 'hrv', weeks: 4 };
 

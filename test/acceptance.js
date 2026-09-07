@@ -393,6 +393,8 @@ const S = require('../docs/sync.js');
   const stEntries = []; for (let n = 0; n < 28; n++) stEntries.push({ date: new Date(Date.UTC(2026, 7, 1) + n * 86400000).toISOString().slice(0, 10), stress: 40, confounds: [], excludeBaseline: false, edema: false, note: '' });
   const stB = L.baseline(stEntries, '2026-08-29', 'stress');
   check('ストレス基準線: 28日平均40・反転信号（+12.5%→赤）', stB.mean === 40 && stB.n === 28 && L.signal(L.deviationPct(45, stB.mean), true) === 'red' && L.signal(L.deviationPct(41, stB.mean), true) === 'blue');
+  const bh = L.parseImport(JSON.stringify([{ date: '2026-09-02', bedHour: 24.5, sleepHrs: 7.25 }]), []).entries[0];
+  check('bedHour/sleepHrs をスキーマとして取込・export往復（v1.6.1）', bh.bedHour === 24.5 && bh.sleepHrs === 7.25 && JSON.parse(L.exportJSON([bh]))[0].bedHour === 24.5);
 
   if (HAS_DATA) {
     const entries2 = all();
