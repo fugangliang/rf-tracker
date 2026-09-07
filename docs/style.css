@@ -54,6 +54,8 @@ main { padding: 12px; max-width: 720px; margin: 0 auto; }
 .chip-yellow { background: #78350f4d; color: var(--mid); border: 1px solid #92400e; }
 .chip-red { background: #7f1d1d4d; color: var(--low); border: 1px solid #991b1b; }
 .chip-none { background: var(--panel2); color: var(--muted); border: 1px solid #334155; }
+.badge.sync { background: #0f766e55; color: var(--accent); border: 1px solid #0f766e; cursor: pointer; }
+.badge.sync.err { background: #7f1d1d55; color: var(--low); border-color: #991b1b; }
 .comment-line { font-size: 13px; line-height: 1.6; margin-top: 6px; }
 .comment-line .label { color: var(--accent); font-weight: 600; }
 .status-level { font-size: 22px; font-weight: 700; }

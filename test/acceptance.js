@@ -346,11 +346,41 @@ console.log('5.8 減量モニタリング（v1.4.0）');
   check('movingAverageSeries: 浮腫日は算入しない', maEd.every(p => p.y < 90));
 }
 
-if (HAS_DATA) {
-  const entries2 = all();
-  console.log('6. 状態ヘッダー全文（2026-07-08・目視確認用）');
-  console.log(L.statusHeaderText(entries2, db.get('2026-07-08')).split('\n').map(l => '     ' + l).join('\n'));
-}
+// 5.9 v1.5.0 自動同期（sync.js: 設定文字列・暗号化エンベロープ・取得結果の分類）
+console.log('5.9 自動同期（v1.5.0）');
+const S = require('../docs/sync.js');
+(async () => {
+  const key = S.bytesToB64url(require('crypto').webcrypto.getRandomValues(new Uint8Array(32)));
+  const setup = `rfsync1:fugangliang/rf-tracker-data:${key}`;
+  const ps = S.parseSetup(setup);
+  check('parseSetup: 正常な設定文字列を解釈', ps && ps.repo === 'fugangliang/rf-tracker-data' && ps.key === key);
+  check('parseSetup: 前後の空白を許容', !!S.parseSetup('  ' + setup + '\n'));
+  check('parseSetup: 不正（鍵長違い・接頭辞違い）は null', S.parseSetup('rfsync1:a/b:short') === null && S.parseSetup('rfsync2:a/b:' + key) === null && S.parseSetup('') === null);
+  const plain = JSON.stringify([{ date: '2026-09-01', hrv: 33, kcalIn: 1800, note: '同期テスト日本語' }]);
+  const env = await S.encryptEnvelope(plain, key, '2026-09-08T00:31:00+00:00');
+  check('encryptEnvelope: エンベロープ形式（v1・AES-256-GCM・iv/ct/updated）', env.v === 1 && env.alg === 'AES-256-GCM' && S.b64urlToBytes(env.iv).length === 12 && typeof env.ct === 'string' && env.updated === '2026-09-08T00:31:00+00:00');
+  check('decryptEnvelope: 往復一致（オブジェクト／JSON文字列の両方）', await S.decryptEnvelope(env, key) === plain && await S.decryptEnvelope(JSON.stringify(env), key) === plain);
+  let bad = false;
+  try { await S.decryptEnvelope(env, S.bytesToB64url(new Uint8Array(32))); } catch (e) { bad = true; }
+  check('decryptEnvelope: 鍵違いは失敗', bad);
+  let tampered = false;
+  try { await S.decryptEnvelope({ ...env, ct: env.ct.slice(0, -2) + 'AA' }, key); } catch (e) { tampered = true; }
+  check('decryptEnvelope: 改ざんは失敗（GCMタグ）', tampered);
+  check('復号結果は parseImport(merge) でそのまま取込可', L.parseImport(await S.decryptEnvelope(env, key), [], { merge: true }).entries[0].kcalIn === 1800);
+  const mk = (status, body) => async () => ({ status, ok: status >= 200 && status < 300, text: async () => body });
+  check('fetchEnvelope: 200 → envelope', (await S.fetchEnvelope('o/r', 't', mk(200, JSON.stringify(env)))).ok === true);
+  check('fetchEnvelope: 401/403 → auth', (await S.fetchEnvelope('o/r', 't', mk(401, ''))).reason === 'auth' && (await S.fetchEnvelope('o/r', 't', mk(403, ''))).reason === 'auth');
+  check('fetchEnvelope: 404 → notfound', (await S.fetchEnvelope('o/r', 't', mk(404, ''))).reason === 'notfound');
+  check('fetchEnvelope: 例外 → network', (await S.fetchEnvelope('o/r', 't', async () => { throw new Error('x'); })).reason === 'network');
+  let hdr = null;
+  await S.fetchEnvelope('o/r', 'tok', async (url, init) => { hdr = { url, ...init.headers }; return { status: 404, ok: false, text: async () => '' }; });
+  check('fetchEnvelope: Contents API URL・raw Accept・Bearer', hdr.url === 'https://api.github.com/repos/o/r/contents/data.enc' && hdr.Accept === 'application/vnd.github.raw+json' && hdr.Authorization === 'Bearer tok');
 
-console.log(`\n結果: ${pass} passed / ${fail} failed`);
-process.exit(fail ? 1 : 0);
+  if (HAS_DATA) {
+    const entries2 = all();
+    console.log('6. 状態ヘッダー全文（2026-07-08・目視確認用）');
+    console.log(L.statusHeaderText(entries2, db.get('2026-07-08')).split('\n').map(l => '     ' + l).join('\n'));
+  }
+  console.log(`\n結果: ${pass} passed / ${fail} failed`);
+  process.exit(fail ? 1 : 0);
+})();

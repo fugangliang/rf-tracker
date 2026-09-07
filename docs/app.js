@@ -1,4 +1,4 @@
-/* RF基準線トラッカー UI＋永続化（IndexedDB）。ロジックは logic.js(RFLogic) に集約。v1.4.0: 減量タブ追加 */
+/* RF基準線トラッカー UI＋永続化（IndexedDB）。ロジックは logic.js(RFLogic) に集約。v1.4.0: 減量タブ追加、v1.5.0: 自動同期(sync.js) */
 'use strict';
 const L = RFLogic;
 
@@ -447,6 +447,8 @@ async function renderBackup() {
   const entries = await getAllEntries();
   const last = await getMeta('lastExport');
   const overdue = isBackupOverdue(last);
+  const syncCfg = await getSyncConfig();
+  const syncLast = await getMeta('syncLast');
   view().innerHTML = `<div class="card">
     <h2>バックアップ</h2>
     <p class="muted">総エントリ数: ${entries.length}</p>
@@ -461,6 +463,19 @@ async function renderBackup() {
     <p class="muted">エクスポートしたJSONは「取込」タブにペーストすれば復元される（同一経路）。</p>
   </div>
   <div class="card">
+    <h2>自動同期（v1.5.0・非公開リポジトリ経由）</h2>
+    <p class="muted">Macの自動取得が暗号化した写しを非公開リポジトリに置き、アプリが起動時・復帰時に取得して自動マージする。手入力（気分等）は上書きされない。</p>
+    <label class="field">設定文字列（rfsync1:…・MacのQRから貼付）<input type="text" id="sync-setup" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="${syncCfg.repo ? '設定済み: ' + syncCfg.repo : 'rfsync1:owner/repo:鍵'}"></label>
+    <label class="field">読み取り専用トークン（GitHub fine-grained PAT）<input type="password" id="sync-token" autocomplete="off" placeholder="${syncCfg.token ? '設定済み（変更時のみ入力）' : 'github_pat_…'}"></label>
+    <div class="field-row">
+      <button class="btn secondary" id="sync-save">同期設定を保存</button>
+      <button class="btn secondary" id="sync-now">今すぐ同期</button>
+      <button class="btn secondary" id="sync-clear">同期を解除</button>
+    </div>
+    <p class="muted" style="margin-top:6px">最終同期: ${syncLast ? `${new Date(syncLast.at).toLocaleString('ja-JP')} — ${esc(syncLast.message)}` : 'なし'}</p>
+    <div class="result" id="sync-result"></div>
+  </div>
+  <div class="card">
     <h2>設定</h2>
     <label class="field">目標体重 (kg)<input type="number" step="0.1" id="goal-weight" value="${typeof (await getMeta('goalWeight')) === 'number' ? await getMeta('goalWeight') : ''}"></label>
     <div class="field-row">
@@ -471,6 +486,37 @@ async function renderBackup() {
     <p class="muted" style="margin-top:6px">この端末のみに保存され、状態評価コメントの体重評価と減量タブの判定に使われる。空欄は既定値。</p>
     <div class="result" id="goal-result"></div>
   </div>`;
+  $('#sync-save').addEventListener('click', async () => {
+    const out = $('#sync-result');
+    const setupStr = $('#sync-setup').value.trim();
+    const tokenStr = $('#sync-token').value.trim();
+    let cfg = { ...syncCfg };
+    if (setupStr) {
+      const parsed = RFSync.parseSetup(setupStr);
+      if (!parsed) { out.textContent = '設定文字列の形式が不正（rfsync1:owner/repo:鍵）'; out.className = 'result err'; return; }
+      cfg.repo = parsed.repo; cfg.key = parsed.key;
+    }
+    if (tokenStr) cfg.token = tokenStr;
+    if (!cfg.repo || !cfg.key || !cfg.token) { out.textContent = '設定文字列とトークンの両方が必要'; out.className = 'result err'; return; }
+    await setMeta('syncRepo', cfg.repo); await setMeta('syncKey', cfg.key); await setMeta('syncToken', cfg.token);
+    $('#sync-setup').value = ''; $('#sync-token').value = '';
+    out.textContent = '同期設定を保存。今すぐ同期を実行…'; out.className = 'result ok';
+    const r = await runSync({ manual: true });
+    out.textContent = r.message; out.className = 'result ' + (r.ok ? 'ok' : 'err');
+    if (r.ok) renderBackup();
+  });
+  $('#sync-now').addEventListener('click', async () => {
+    const out = $('#sync-result');
+    out.textContent = '同期中…'; out.className = 'result';
+    const r = await runSync({ manual: true });
+    out.textContent = r.message; out.className = 'result ' + (r.ok ? 'ok' : 'err');
+  });
+  $('#sync-clear').addEventListener('click', async () => {
+    for (const k of ['syncRepo', 'syncKey', 'syncToken', 'syncLast', 'syncLastUpdated']) await setMeta(k, null);
+    updateSyncBadge(null);
+    await renderBackup();
+    $('#sync-result').textContent = '同期設定を解除しました'; $('#sync-result').className = 'result ok';
+  });
   $('#goal-save').addEventListener('click', async () => {
     const s = $('#goal-weight').value.trim();
     const v = s === '' ? null : +s;
@@ -674,12 +720,94 @@ function drawWeightChart(entries, asOf, goalWeight) {
   wrap.innerHTML = svg;
 }
 
+
+/* ================= 自動同期（v1.5.0） =================
+ * 非公開リポジトリの data.enc（AES-256-GCM）を取得→復号→マージ取込。鍵・トークンはIndexedDB metaのみ。
+ * 失敗しても従来の「ファイルから取込」で運用継続できる（同期は付加経路）。 */
+async function getSyncConfig() {
+  const repo = await getMeta('syncRepo'), key = await getMeta('syncKey'), token = await getMeta('syncToken');
+  return { repo: typeof repo === 'string' ? repo : null, key: typeof key === 'string' ? key : null, token: typeof token === 'string' ? token : null };
+}
+let syncRunning = false, syncLastAttempt = 0;
+async function runSync(opts) {
+  const manual = !!(opts && opts.manual);
+  if (syncRunning) return { ok: false, state: 'busy', message: '同期実行中' };
+  const cfg = await getSyncConfig();
+  if (!cfg.repo || !cfg.key || !cfg.token) return { ok: false, state: 'unconfigured', message: '同期未設定（保全タブで設定）' };
+  if (typeof navigator !== 'undefined' && navigator.onLine === false) return { ok: false, state: 'offline', message: 'オフラインのため同期スキップ' };
+  syncRunning = true; syncLastAttempt = Date.now();
+  updateSyncBadge({ pending: true });
+  let result;
+  try {
+    const fr = await RFSync.fetchEnvelope(cfg.repo, cfg.token);
+    if (!fr.ok) {
+      const msgs = { auth: 'トークンが無効または期限切れ（保全タブで再設定）', notfound: '配信ファイルなし（Mac側の初回pushを確認）', network: 'ネットワーク到達不可', http: `取得失敗 HTTP ${fr.status}` };
+      result = { ok: false, state: fr.reason, message: msgs[fr.reason] || '取得失敗' };
+    } else {
+      const lastUpdated = await getMeta('syncLastUpdated');
+      if (!manual && fr.envelope.updated && fr.envelope.updated === lastUpdated) {
+        result = { ok: true, state: 'uptodate', message: `最新（${fr.envelope.updated}）` };
+      } else {
+        let text;
+        try { text = await RFSync.decryptEnvelope(fr.envelope, cfg.key); }
+        catch (e) { result = { ok: false, state: 'key', message: '復号失敗（設定文字列の鍵が一致しない）' }; }
+        if (text !== undefined) {
+          const existing = await getAllEntries();
+          const res = L.parseImport(text, existing, { merge: true });
+          if (res.entries.length) await putEntries(res.entries);
+          const existingDates = new Set(existing.map(e => e.date));
+          const added = res.entries.filter(e => !existingDates.has(e.date)).length;
+          await setMeta('syncLastUpdated', fr.envelope.updated || null);
+          result = { ok: true, state: 'updated', added, updated: res.entries.length - added,
+            message: `同期取込 ${res.entries.length}件（新規${added}・更新${res.entries.length - added}）${res.errors.length ? ` / エラー${res.errors.length}` : ''}${res.edemaDetected.length ? ` / 浮腫検出 ${res.edemaDetected.join(', ')}` : ''}` };
+        }
+      }
+    }
+  } catch (e) {
+    result = { ok: false, state: 'error', message: '同期エラー: ' + (e && e.message ? e.message : e) };
+  } finally {
+    syncRunning = false;
+  }
+  await setMeta('syncLast', { at: Date.now(), ok: result.ok, state: result.state, message: result.message });
+  updateSyncBadge(result);
+  if (result.state === 'updated' && TABS[currentTab]) await TABS[currentTab]();
+  return result;
+}
+function updateSyncBadge(r) {
+  const b = $('#sync-badge');
+  if (!b) return;
+  if (r === null) { b.classList.add('hidden'); return; }
+  b.classList.remove('hidden');
+  if (r.pending) { b.textContent = '同期中'; b.classList.remove('err'); return; }
+  if (r.ok) {
+    const d = new Date();
+    b.textContent = `同期 ${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+    b.classList.remove('err');
+  } else if (r.state === 'unconfigured') {
+    b.classList.add('hidden');
+  } else {
+    b.textContent = r.state === 'offline' ? '同期: オフライン' : '同期エラー';
+    b.classList.toggle('err', r.state !== 'offline');
+  }
+  b.title = r.message || '';
+}
+/* 起動時と、バックグラウンドからの復帰時（10分以上経過）に同期する */
+function setupAutoSync() {
+  runSync({});
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible' && Date.now() - syncLastAttempt > 10 * 60 * 1000) runSync({});
+  });
+  window.addEventListener('online', () => { if (Date.now() - syncLastAttempt > 60 * 1000) runSync({}); });
+  $('#sync-badge').addEventListener('click', () => runSync({ manual: true }));
+}
+
 /* ================= 起動 ================= */
 (async function main() {
   db = await openDB();
   document.querySelectorAll('#tabbar button').forEach(b =>
     b.addEventListener('click', () => switchTab(b.dataset.tab)));
   await switchTab('dashboard');
+  setupAutoSync();
   if ('serviceWorker' in navigator) {
     navigator.serviceWorker.register('sw.js').catch(() => { /* ローカルfile://等では無視 */ });
   }

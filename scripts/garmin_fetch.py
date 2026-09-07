@@ -17,7 +17,9 @@
   7日以内なら翌日以降の再配信で自動的に埋まる。
   状態（data/auto_fetch_state.json）はOMRON取りこぼし検出と観測用に維持。
 - 出力先: data/import/auto_daily_latest.json（固定名・上書き）と
-  iCloud Drive の rf-tracker/garmin_YYYYMMDD.json（アプリ「ファイルから取込」が読む）
+  iCloud Drive の rf-tracker/garmin_YYYYMMDD.json（アプリ「ファイルから取込」が読む・予備経路）
+- v1.5.0〜 自動同期: sync_push.py で写し（data/mirror.json）にマージ→AES-256-GCM暗号化→
+  非公開リポジトリ rf-tracker-data/data.enc へ push。アプリは起動時に取得・復号・マージ取込
 - 列マッピングはCSV運用（CLAUDE.md 2026-07-16確定）と同一:
   睡眠スコア→sleep / 安静時心拍→rhr / bodyBatteryChange→bb / 夜間HRV→hrv
   （CSVの「Body Battery」列＝睡眠中の回復量＝sleep APIのbodyBatteryChange。
@@ -230,6 +232,14 @@ def main():
     with open(os.path.join(ICLOUD_DIR, fname), "w") as f:
         f.write(payload)
     log(f"出力: {len(entries)}件 → {OUT_LOCAL} / iCloud Drive {fname}")
+
+    # v1.5.0 自動同期: Mac側の写しにマージし、暗号化して非公開リポジトリへ push
+    # （失敗してもiCloud配信は済んでいるので従来の「ファイルから取込」で運用継続できる）
+    try:
+        import sync_push
+        log("同期: " + sync_push.update_and_push(entries))
+    except Exception as e:
+        log(f"同期失敗（iCloud配信は完了済み。手動: scripts/sync_push.py --push）: {e}")
 
     if not args.since:  # --since は検証・追補用のため状態を進めない
         # omronDates=体組成を配信済みの日付（取りこぼし誤検出の防止用・直近60日分）。

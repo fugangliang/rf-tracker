@@ -1,10 +1,11 @@
 /* RF基準線トラッカー Service Worker — 完全オフライン起動（cache-first） */
-const VERSION = 'rf-tracker-v1.4.0';
+const VERSION = 'rf-tracker-v1.5.0';
 const ASSETS = [
   './',
   './index.html',
   './style.css',
   './logic.js',
+  './sync.js',
   './app.js',
   './manifest.webmanifest',
   './icons/icon-180.png',
