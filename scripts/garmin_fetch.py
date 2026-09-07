@@ -5,8 +5,9 @@
   OMRON: weight/fat/muscle/visceral（体組成）。
   活動量は当日分を常にnullにする（9:30時点は日中途中の部分値のため）。前日以前は
   ローリング7日再配信＋マージ取込（非nullのみ上書き）で翌日以降に確定値へ自己修正される。
-  kcalIn/protein（摂取kcal・タンパク質）は手入力専用のため常にnull（数値を出すと
-  マージで手入力を潰す）。
+  kcalIn/protein（摂取kcal・タンパク質）はGarmin Connect+の栄養トラッキング
+  （nutrition-service の dailyNutritionContent）から取得（2026-09-07〜）。食事ログが
+  ない日はnull（0にしない＝マージで手入力を潰さない）。当日分は活動量と同様にnull。
   取込が同一日付を丸ごと置換する仕様のため、両者を同一エントリにマージして
   1ファイル/日で出力する（別ファイルにすると互いのデータを消し合う）
 - OMRONは未認証・取得失敗時はスキップしGarmin分のみで続行する（omron_client.py参照）
@@ -55,7 +56,7 @@ def empty_entry(date):
         "date": date, "hrv": None, "rhr": None, "sleep": None, "bb": None,
         "weight": None, "mood": None, "fat": None, "muscle": None, "visceral": None,
         "steps": None, "kcalOut": None, "kcalActive": None,  # Garmin活動量（v1.4.0）
-        "kcalIn": None, "protein": None,  # 手入力専用。ここでは常にNone
+        "kcalIn": None, "protein": None,  # Garmin Connect+ 栄養トラッキング（食事ログなしはNone）
         "confounds": [], "excludeBaseline": False, "edema": False, "note": "",
     }
 
@@ -95,6 +96,19 @@ def fetch_activity(api, d):
     to_int = lambda v: int(round(v)) if isinstance(v, (int, float)) else None
     return (to_int(js.get("totalSteps")), to_int(js.get("totalKilocalories")),
             to_int(js.get("activeKilocalories")))
+
+
+def fetch_nutrition(api, d):
+    """Garmin Connect+ 栄養トラッキングの日次合計（摂取kcal / タンパク質g）。
+    食事ログが1件もない日は dailyNutritionContent が無い or calories=0 → (None, None)。
+    ※ user_summary の consumedKilocalories は Connect+ 食事ログを反映しない（2026-09-07確認）"""
+    js = api.get_nutrition_daily_food_log(d) or {}
+    c = js.get("dailyNutritionContent") or {}
+    kcal = c.get("calories")
+    if not isinstance(kcal, (int, float)) or kcal <= 0:
+        return None, None
+    prot = c.get("protein")
+    return int(round(kcal)), (int(round(prot)) if isinstance(prot, (int, float)) else None)
 
 
 def merge_omron(entries_by_date, start, today, prev_delivered):
@@ -181,7 +195,8 @@ def main():
         e["hrv"] = safe(fetch_hrv, api, ds)
         if d < today:  # 当日は日中途中の部分値になるため出力しない（翌日以降の再配信で確定）
             e["steps"], e["kcalOut"], e["kcalActive"] = safe(fetch_activity, api, ds) or (None, None, None)
-        got = {k: e[k] for k in ("sleep", "rhr", "hrv", "bb", "steps", "kcalOut", "kcalActive")}
+            e["kcalIn"], e["protein"] = safe(fetch_nutrition, api, ds) or (None, None)
+        got = {k: e[k] for k in ("sleep", "rhr", "hrv", "bb", "steps", "kcalOut", "kcalActive", "kcalIn", "protein")}
         if any(v is not None for v in got.values()):
             entries_by_date[ds] = e
             log(f"  {ds}: {got}")

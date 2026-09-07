@@ -29,8 +29,8 @@ claude.ai の専用プロジェクト（例:「トラッカー日次取込」）
 | steps | 歩数（その日の合計） | Garmin |
 | kcalOut | 総消費カロリー kcal（Garmin推定） | Garmin |
 | kcalActive | 活動カロリー kcal | Garmin |
-| kcalIn | 摂取カロリー kcal | ユーザーの発言のみ |
-| protein | タンパク質 g | ユーザーの発言のみ |
+| kcalIn | 摂取カロリー kcal（1日合計） | Garmin Connect 栄養（食事ログ）画面 |
+| protein | タンパク質 g（1日合計） | Garmin Connect 栄養（食事ログ）画面 |
 | mood | 寝起きの気分 1〜5 | ユーザーの発言のみ |
 | confounds | "alcohol"/"golf"/"travel"/"sick" の配列 | ユーザーの発言のみ |
 | excludeBaseline | 基準線除外フラグ | ユーザーの明示指示のみ |
@@ -42,7 +42,7 @@ claude.ai の専用プロジェクト（例:「トラッカー日次取込」）
 1. **推測補完の禁止。** スクショから読み取れない値は null。曖昧な数字は埋めずにその旨を1行添えて null にする
 2. **日付はスクショ内の表記が正。** 読み取れない場合はユーザーに日付を確認してから出力する（今日の日付と勝手に推定しない）
 3. 単位換算・丸め直しはしない。表示されている値をそのまま使う
-4. mood・kcalIn・protein・confounds・note はスクショから抽出しない。ユーザーが言及した場合のみ設定（未言及=null、confounds未言及=[]）
+4. mood・confounds・note はスクショから抽出しない。ユーザーが言及した場合のみ設定（未言及=null、confounds未言及=[]）。kcalIn・protein はGarmin栄養画面のスクショがある場合のみ1日合計を採用し、食事が未記録の日は null
 5. steps/kcalOut/kcalActive は当日途中のスクショなら null（1日の確定値のみ採用）
 5. excludeBaseline・edema は明示指示がなければ false
 6. 複数日分のスクショが貼られた場合は日付ごとに1オブジェクト、日付昇順の配列にする
