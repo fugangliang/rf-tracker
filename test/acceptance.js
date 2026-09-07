@@ -241,6 +241,111 @@ console.log('5. コアロジック単体検証');
   check('マージ: マージ後の3値で浮腫シグネチャ検出', re.entries[0].edema === true && re.edemaDetected.includes('2026-08-01'));
 }
 
+// 5.8 v1.4.0 減量モニタリング（後方互換スキーマ＋判定ロジック・合成データ）
+console.log('5.8 減量モニタリング（v1.4.0）');
+{
+  const base = { hrv: null, rhr: null, sleep: null, bb: null, weight: null, mood: null, fat: null, muscle: null, visceral: null, confounds: [], excludeBaseline: false, edema: false, note: '' };
+  const dstr = n => new Date(Date.UTC(2026, 7, 1) + n * 86400000).toISOString().slice(0, 10); // 2026-08-01 + n日
+  const mk = (n, o) => ({ ...base, date: dstr(n), ...o });
+
+  // --- スキーマ後方互換 ---
+  const rOld = L.parseImport(JSON.stringify([{ date: '2026-08-01', hrv: 40, weight: 88 }]), []);
+  check('旧JSON（新キーなし）は新5フィールドnullで受理', ['steps', 'kcalOut', 'kcalActive', 'kcalIn', 'protein'].every(k => rOld.entries[0][k] === null));
+  const rNew = L.parseImport(JSON.stringify([{ date: '2026-08-01', steps: 8000, kcalOut: 2400, kcalActive: 300, kcalIn: 1900, protein: 150 }]), []);
+  const en = rNew.entries[0];
+  check('新キー付きJSONを取込・保持', en.steps === 8000 && en.kcalOut === 2400 && en.kcalActive === 300 && en.kcalIn === 1900 && en.protein === 150);
+  const back = L.parseImport(L.exportJSON(rNew.entries), []);
+  check('export→再importで新キー往復一致', JSON.stringify(back.entries[0]) === JSON.stringify(en));
+  check('旧エントリ（新キー未定義）のexportはnullで出力', JSON.parse(L.exportJSON([{ ...base, date: '2026-08-01' }]))[0].steps === null);
+  check('数値でない新キーはエラー', L.parseImport(JSON.stringify([{ date: '2026-08-01', kcalIn: 'abc' }]), []).errors.length === 1);
+  // クイック入力（減量タブ）はマージで自動取得値を保全、自動JSON（kcalIn null）は手入力を保全
+  const ex = [mk(0, { hrv: 40, steps: 9000, kcalOut: 2500 })];
+  const q = L.parseImport(JSON.stringify([{ date: dstr(0), kcalIn: 1800, protein: 140 }]), ex, { merge: true }).entries[0];
+  check('クイック入力マージ: hrv/steps/kcalOutを保全しkcalIn/proteinを追加', q.hrv === 40 && q.steps === 9000 && q.kcalOut === 2500 && q.kcalIn === 1800 && q.protein === 140);
+  const a = L.parseImport(JSON.stringify([{ ...base, date: dstr(0), steps: 9500, kcalOut: 2550 }]), [q], { merge: true }).entries[0];
+  check('自動JSON再取込（kcalIn null）で手入力kcalIn/proteinを保全・活動量は更新', a.kcalIn === 1800 && a.protein === 140 && a.steps === 9500);
+  check('monthlySummary TSV見出しに新列', L.monthlySummary([q], '2026-08').includes('\tsteps\tkcalOut\tkcalActive\tkcalIn\tprotein\t'));
+
+  // --- ペース判定（2日おき測定・28日窓＝当日含む） ---
+  const series = (slopePerDay, opts) => {
+    const arr = [];
+    for (let n = 0; n <= 27; n += 2) arr.push(mk(n, { weight: +(88 - slopePerDay * n).toFixed(2), ...(opts && opts.extra ? opts.extra(n) : {}) }));
+    return arr;
+  };
+  const end = dstr(27);
+  const st = (arr, o) => L.weightLossStatus(arr, end, o || {});
+  check('ペース good（−0.3kg/週）', st(series(0.3 / 7)).pace.state === 'good', JSON.stringify(st(series(0.3 / 7)).pace));
+  check('ペース fast（−0.7kg/週）', st(series(0.7 / 7)).pace.state === 'fast');
+  check('ペース stall（0kg/週）', st(series(0)).pace.state === 'stall');
+  check('ペース gain（+0.3kg/週）', st(series(-0.3 / 7)).pace.state === 'gain');
+  check('ペース 勾配の値（−0.3kg/週）', Math.abs(st(series(0.3 / 7)).pace.slopeKgWeek - (-0.3)) < 0.02);
+  const few = series(0.3 / 7).slice(0, 4);
+  check('ペース insufficient（n=4）', st(few).pace.state === 'insufficient' && st(few).pace.n === 4);
+  const span = [mk(20, { weight: 88 }), mk(21, { weight: 87.9 }), mk(22, { weight: 87.8 }), mk(23, { weight: 87.7 }), mk(24, { weight: 87.6 }), mk(25, { weight: 87.5 }), mk(27, { weight: 87.4 })];
+  check('ペース insufficient（n=7でも期間<14日）', st(span).pace.state === 'insufficient');
+  const withEdema = series(0.3 / 7).concat([mk(13, { weight: 92, fat: 20, muscle: 35, edema: true })]).sort((x, y) => x.date < y.date ? -1 : 1);
+  check('ペース: 浮腫日の外れ値（92kg）は無視', st(withEdema).pace.state === 'good' && st(withEdema).pace.n === 14);
+  const withExcl = series(0.3 / 7).concat([mk(13, { weight: 92, excludeBaseline: true })]).sort((x, y) => x.date < y.date ? -1 : 1);
+  check('ペース: 基準線除外日の外れ値は無視', st(withExcl).pace.state === 'good');
+  // 月次ルール: 前28日が90.5kg一定・直近28日が88kg一定（勾配0だが差 −2.5kg）→ fast
+  const monthly = [];
+  for (let n = -28; n <= 27; n += 2) monthly.push(mk(n, { weight: n < 0 ? 90.5 : 88 }));
+  const ms = st(monthly);
+  check('月次ルール: 28日平均差 −2.5kg で monthlyFast → fast', ms.pace.monthlyFast === true && ms.pace.state === 'fast', JSON.stringify(ms.pace));
+  check('目標差: goalWeight 85 で remaining 3.0', Math.abs(st(series(0), { goalWeight: 85 }).remaining - 3) < 1e-9);
+
+  // --- 体組成の質 ---
+  const comp = (fatRecent, fatPrior, wRecent, wPrior) => {
+    const arr = [];
+    for (let n = -28; n <= 27; n += 3) arr.push(mk(n, { weight: n < 0 ? wPrior : wRecent, fat: n < 0 ? fatPrior : fatRecent }));
+    return st(arr).composition;
+  };
+  // 前: 90kg×27% = 脂肪24.3/除脂肪65.7、後: 89kg×26% = 23.14/65.86 → 脂肪−1.16・除脂肪+0.16
+  check('体組成 good（脂肪↓・除脂肪維持）', comp(26, 27, 89, 90).state === 'good', JSON.stringify(comp(26, 27, 89, 90)));
+  // 前: 90×27% = 24.3/65.7、後: 88×27% = 23.76/64.24 → 脂肪−0.54・除脂肪−1.46
+  check('体組成 lean_loss（脂肪↓・除脂肪↓）', comp(27, 27, 88, 90).state === 'lean_loss');
+  // 前: 88×26% = 22.88、後: 89×27% = 24.03 → 脂肪+1.15
+  check('体組成 fat_gain', comp(27, 26, 89, 88).state === 'fat_gain');
+  check('体組成 flat', comp(27, 27, 90, 90).state === 'flat');
+  check('体組成 insufficient（体脂肪率なし）', st(series(0.3 / 7)).composition.state === 'insufficient');
+
+  // --- 収支・タンパク質 ---
+  const energy = (kin, kout, prot, days) => {
+    const arr = [];
+    for (let n = 27 - (days - 1); n <= 27; n++) arr.push(mk(n, { kcalIn: kin, kcalOut: kout, protein: prot }));
+    return st(arr).energy;
+  };
+  const e500 = energy(1900, 2400, 150, 7);
+  check('収支 on（赤字500）・理論ペース≈−0.45kg/週', e500.state === 'on' && Math.abs(e500.expectedKgWeek - (-500 * 7 / 7700)) < 1e-9);
+  check('収支 below（赤字200）', energy(2200, 2400, 150, 7).state === 'below');
+  check('収支 above（赤字900）', energy(1500, 2400, 150, 7).state === 'above');
+  check('収支 insufficient（n=2）', energy(1900, 2400, 150, 2).state === 'insufficient');
+  check('タンパク質 ok（150g）/ low（100g）', e500.protein.state === 'ok' && energy(1900, 2400, 100, 7).protein.state === 'low');
+  const e7 = []; for (let n = 21; n <= 27; n++) e7.push(mk(n, { kcalIn: 1900, kcalOut: 2400 }));
+  check('収支目標の上書き（deficitTarget 300 で赤字500は above）', st(e7, { deficitTarget: 300 }).energy.state === 'above');
+
+  // --- 活動量 ---
+  const act = (recent, baseSteps) => {
+    const arr = [];
+    for (let n = -7; n <= 20; n++) arr.push(mk(n, { steps: baseSteps }));  // 基準線（当日を含まない直近28日）
+    for (let n = 21; n <= 27; n++) arr.push(mk(n, { steps: recent }));
+    return st(arr).activity;
+  };
+  check('活動量 up（7日平均 +20%）', act(12000, 10000).state === 'up', JSON.stringify(act(12000, 10000)));
+  check('活動量 down（−20%）', act(8000, 10000).state === 'down');
+  check('活動量 flat', act(10500, 10000).state === 'flat');
+  const actFew = (() => { const arr = []; for (let n = 21; n <= 27; n++) arr.push(mk(n, { steps: 10000 })); return st(arr).activity; })();
+  check('活動量 insufficient（基準線n<7）', actFew.state === 'insufficient');
+
+  // --- 全文テキスト・移動平均 ---
+  const txt = L.weightLossText(series(0.3 / 7), end, { goalWeight: 85 });
+  check('weightLossText: 見出しと目標行', txt.startsWith(`【減量モニター ${end}】`) && txt.includes('目標85.0kgまで残り'));
+  const ma = L.movingAverageSeries(series(0), end, 'weight', 4, 7);
+  check('movingAverageSeries: 4週分・値がある日のみ・平均88', ma.length > 0 && ma.every(p => Math.abs(p.y - 88) < 1e-9) && ma[ma.length - 1].x === 27);
+  const maEd = L.movingAverageSeries(withEdema, end, 'weight', 4, 7);
+  check('movingAverageSeries: 浮腫日は算入しない', maEd.every(p => p.y < 90));
+}
+
 if (HAS_DATA) {
   const entries2 = all();
   console.log('6. 状態ヘッダー全文（2026-07-08・目視確認用）');

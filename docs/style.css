@@ -30,8 +30,8 @@ main { padding: 12px; max-width: 720px; margin: 0 auto; }
   border-top: 1px solid #334155;
 }
 #tabbar button {
-  flex: 1; padding: 12px 0 10px; background: none; border: none;
-  color: var(--muted); font-size: 12px; cursor: pointer;
+  flex: 1; min-width: 0; padding: 12px 0 10px; background: none; border: none;
+  color: var(--muted); font-size: 12px; cursor: pointer; white-space: nowrap;
 }
 #tabbar button.active { color: var(--accent); font-weight: 600; }
 

@@ -1,4 +1,4 @@
-/* RF基準線トラッカー UI＋永続化（IndexedDB）。ロジックは logic.js(RFLogic) に集約。 */
+/* RF基準線トラッカー UI＋永続化（IndexedDB）。ロジックは logic.js(RFLogic) に集約。v1.4.0: 減量タブ追加 */
 'use strict';
 const L = RFLogic;
 
@@ -77,7 +77,7 @@ async function copyText(text, btn) {
 }
 
 /* ================= タブ制御 ================= */
-const TABS = { dashboard: renderDashboard, import: renderImport, record: renderRecord, trend: renderTrend, monthly: renderMonthly, backup: renderBackup };
+const TABS = { dashboard: renderDashboard, import: renderImport, record: renderRecord, trend: renderTrend, loss: renderLoss, monthly: renderMonthly, backup: renderBackup };
 let currentTab = 'dashboard';
 async function switchTab(tab) {
   currentTab = tab;
@@ -251,9 +251,10 @@ async function doImport() {
 }
 
 /* ================= F1 記録（手入力） ================= */
-async function renderRecord() {
+async function renderRecord(dateArg) {
   const entries = await getAllEntries();
-  const today = todayStr();
+  // v1.4.0修正: 日付変更時は選択日の既存値を読み込む（従来は当日の値のまま日付だけ変わり、保存で別日を上書きしていた）
+  const today = typeof dateArg === 'string' && L.isValidDateStr(dateArg) ? dateArg : todayStr();
   const ex = entries.find(e => e.date === today) || null;
   const v = (f) => ex && ex[f] !== null && ex[f] !== undefined ? ex[f] : '';
   view().innerHTML = `<div class="card">
@@ -268,6 +269,14 @@ async function renderRecord() {
       <label class="field">体脂肪率 (%)<input type="number" step="any" id="f-fat" value="${v('fat')}"></label>
       <label class="field">骨格筋率 (%)<input type="number" step="any" id="f-muscle" value="${v('muscle')}"></label>
       <label class="field">内臓脂肪レベル<input type="number" step="any" id="f-visceral" value="${v('visceral')}"></label>
+    </div>
+    <label class="field" style="margin-top:10px">活動・食事（v1.4）</label>
+    <div class="field-row">
+      <label class="field">歩数<input type="number" step="any" id="f-steps" value="${v('steps')}"></label>
+      <label class="field">消費kcal (Garmin)<input type="number" step="any" id="f-kcalout" value="${v('kcalOut')}"></label>
+      <label class="field">活動kcal<input type="number" step="any" id="f-kcalactive" value="${v('kcalActive')}"></label>
+      <label class="field">摂取kcal<input type="number" step="any" id="f-kcalin" value="${v('kcalIn')}"></label>
+      <label class="field">タンパク質 (g)<input type="number" step="any" id="f-protein" value="${v('protein')}"></label>
     </div>
     <label class="field">寝起きの気分（1〜5）</label>
     <div class="mood-btns" id="f-mood">
@@ -296,9 +305,7 @@ async function renderRecord() {
 
   $('#f-date').addEventListener('change', async () => {
     // 日付を変えたら既存値を読み直す
-    const d = $('#f-date').value;
-    const all = await getAllEntries();
-    if (all.find(e => e.date === d)) { await renderRecordFor(d); }
+    await renderRecord($('#f-date').value);
   });
 
   $('#save-btn').addEventListener('click', async () => {
@@ -309,6 +316,8 @@ async function renderRecord() {
       hrv: num('#f-hrv'), rhr: num('#f-rhr'), sleep: num('#f-sleep'), bb: num('#f-bb'),
       weight: num('#f-weight'), mood: moodSel, fat: num('#f-fat'), muscle: num('#f-muscle'),
       visceral: num('#f-visceral'),
+      steps: num('#f-steps'), kcalOut: num('#f-kcalout'), kcalActive: num('#f-kcalactive'),
+      kcalIn: num('#f-kcalin'), protein: num('#f-protein'),
       confounds: [...document.querySelectorAll('.check-row input[data-c]')].filter(c => c.checked).map(c => c.dataset.c),
       excludeBaseline: $('#f-exclude').checked,
       edema: $('#f-edema').checked,
@@ -329,7 +338,6 @@ async function renderRecord() {
     out.className = 'result ok';
   });
 }
-async function renderRecordFor(_d) { await renderRecord(); const d = _d; $('#f-date').value = d; }
 
 /* ================= F4 トレンド ================= */
 const TREND_METRICS = [
@@ -337,6 +345,7 @@ const TREND_METRICS = [
   { key: 'sleep', name: '睡眠' }, { key: 'bb', name: 'BB' },
   { key: 'weight', name: '体重' }, { key: 'mood', name: '気分' },
   { key: 'fat', name: '体脂肪率' }, { key: 'muscle', name: '骨格筋率' },
+  { key: 'steps', name: '歩数' }, { key: 'kcalIn', name: '摂取kcal' }, { key: 'kcalOut', name: '消費kcal' },
 ];
 let trendState = { metric: 'hrv', weeks: 4 };
 
@@ -454,8 +463,12 @@ async function renderBackup() {
   <div class="card">
     <h2>設定</h2>
     <label class="field">目標体重 (kg)<input type="number" step="0.1" id="goal-weight" value="${typeof (await getMeta('goalWeight')) === 'number' ? await getMeta('goalWeight') : ''}"></label>
+    <div class="field-row">
+      <label class="field">赤字目標 (kcal/日・既定${L.WL_DEFAULTS.deficitTarget})<input type="number" step="10" id="goal-deficit" value="${typeof (await getMeta('deficitTarget')) === 'number' ? await getMeta('deficitTarget') : ''}"></label>
+      <label class="field">タンパク質目標 (g/日・既定${L.WL_DEFAULTS.proteinTarget})<input type="number" step="5" id="goal-protein" value="${typeof (await getMeta('proteinTarget')) === 'number' ? await getMeta('proteinTarget') : ''}"></label>
+    </div>
     <button class="btn secondary" id="goal-save">設定を保存</button>
-    <p class="muted" style="margin-top:6px">この端末のみに保存され、状態評価コメントの体重評価に使われる。</p>
+    <p class="muted" style="margin-top:6px">この端末のみに保存され、状態評価コメントの体重評価と減量タブの判定に使われる。空欄は既定値。</p>
     <div class="result" id="goal-result"></div>
   </div>`;
   $('#goal-save').addEventListener('click', async () => {
@@ -466,8 +479,20 @@ async function renderBackup() {
       $('#goal-result').className = 'result err';
       return;
     }
+    const parseOpt = id => { const t = $(id).value.trim(); return t === '' ? null : +t; };
+    const dv = parseOpt('#goal-deficit'), pv = parseOpt('#goal-protein');
+    for (const x of [dv, pv]) {
+      if (x !== null && (!isFinite(x) || x <= 0)) {
+        $('#goal-result').textContent = '赤字目標・タンパク質目標は正の数値（空欄で既定値）';
+        $('#goal-result').className = 'result err';
+        return;
+      }
+    }
     await setMeta('goalWeight', v);
-    $('#goal-result').textContent = v === null ? '目標体重を解除しました' : `目標体重 ${v}kg を保存しました`;
+    await setMeta('deficitTarget', dv);
+    await setMeta('proteinTarget', pv);
+    $('#goal-result').textContent = (v === null ? '目標体重を解除' : `目標体重 ${v}kg`) +
+      ` / 赤字目標 ${dv === null ? `既定${L.WL_DEFAULTS.deficitTarget}` : dv}kcal / タンパク質 ${pv === null ? `既定${L.WL_DEFAULTS.proteinTarget}` : pv}g を保存しました`;
     $('#goal-result').className = 'result ok';
   });
   $('#export-btn').addEventListener('click', async () => {
@@ -492,6 +517,161 @@ async function updateBackupBadge() {
   const last = await getMeta('lastExport');
   const entries = await getAllEntries();
   $('#backup-badge').classList.toggle('hidden', !(entries.length && isBackupOverdue(last)));
+}
+
+
+/* ================= F7 減量モニタリング（v1.4.0） ================= */
+const WL_CHIP = {
+  good: 'blue', on: 'blue', ok: 'blue', up: 'blue',
+  stall: 'yellow', flat: 'yellow', below: 'yellow', low: 'yellow', down: 'yellow',
+  fast: 'red', gain: 'red', lean_loss: 'red', fat_gain: 'red', above: 'red',
+  insufficient: 'none'
+};
+async function wlOpts() {
+  const g = await getMeta('goalWeight'), d = await getMeta('deficitTarget'), p = await getMeta('proteinTarget');
+  return {
+    goalWeight: typeof g === 'number' ? g : null,
+    deficitTarget: typeof d === 'number' ? d : L.WL_DEFAULTS.deficitTarget,
+    proteinTarget: typeof p === 'number' ? p : L.WL_DEFAULTS.proteinTarget
+  };
+}
+async function renderLoss() {
+  const entries = await getAllEntries();
+  const opts = await wlOpts();
+  const today = todayStr();
+  if (!entries.length) {
+    view().innerHTML = `<div class="card"><h2>減量モニター</h2><p class="muted">データがありません。「取込」タブからインポートしてください。</p></div>`;
+    return;
+  }
+  const latest = entries[entries.length - 1];
+  const asOf = latest.date > today ? latest.date : today;
+  const w = L.weightLossStatus(entries, asOf, opts);
+  const text = L.weightLossText(entries, asOf, opts);
+  const chip = (axis, state) => `<span class="chip chip-${WL_CHIP[state]}">${axis} ${L.WL_LABELS[axis === 'ペース' ? 'pace' : axis === '体組成' ? 'composition' : axis === '収支' ? 'energy' : axis === 'タンパク質' ? 'protein' : 'activity'][state]}</span>`;
+
+  // 体重測定が途絶えている場合の注意（最新実測から7日超）
+  let staleHtml = '';
+  if (!w.latest) staleHtml = `<div class="notice">体重の記録がない。OMRONで測定し、9:30の自動取得前にオムロンコネクトへ転送する。</div>`;
+  else if (L.dateToNum(asOf) - L.dateToNum(w.latest.date) > 7) staleHtml = `<div class="notice">最新の体重実測が ${w.latest.date}（${L.dateToNum(asOf) - L.dateToNum(w.latest.date)}日前）。判定には週2回以上の測定が要る。OMRON転送は9:30前に。</div>`;
+
+  let weightLine;
+  if (w.latest) {
+    weightLine = `<span class="label">体重:</span> <b>${w.latest.weight.toFixed(1)}kg</b> <span class="muted">（${w.latest.date}実測${w.latest.edema ? '・浮腫' : ''}）</span>`;
+    if (w.goalWeight !== null) weightLine += w.remaining > 0 ? ` 目標${w.goalWeight.toFixed(1)}kgまで残り<b>${w.remaining.toFixed(1)}kg</b>` : ` 目標${w.goalWeight.toFixed(1)}kg達成`;
+  } else {
+    weightLine = `<span class="label">体重:</span> —`;
+  }
+
+  const fm = w.composition.fatMass, lm = w.composition.leanMass;
+  const fmtKg = v => typeof v === 'number' ? v.toFixed(1) : '—';
+  const fmtDiff = v => typeof v === 'number' ? `<span class="${v <= -0.3 ? 'dev-pos' : v >= 0.3 ? 'dev-neg' : ''}">${v >= 0 ? '+' : ''}${v.toFixed(2)}kg</span>` : '';
+  const cards = [
+    { name: '減量ペース（28日窓）', value: w.pace.slopeKgWeek !== null ? `${w.pace.slopeKgWeek >= 0 ? '+' : ''}${w.pace.slopeKgWeek.toFixed(2)}<small> kg/週</small>` : '—', ref: `有効体重 n=${w.pace.n}・期間${w.pace.spanDays}日${w.pace.monthly ? `<br>28日平均 前28日比 ${w.pace.monthly.diff >= 0 ? '+' : ''}${w.pace.monthly.diff.toFixed(1)}kg` : ''}` },
+    { name: '脂肪量（28日平均）', value: `${fmtKg(fm.recent)}<small> kg</small>`, ref: `前28日 ${fmtKg(fm.prior)}kg ${fmtDiff(fm.diff)}（n=${fm.nRecent}/${fm.nPrior}）` },
+    { name: '除脂肪量（28日平均）', value: `${fmtKg(lm.recent)}<small> kg</small>`, ref: `前28日 ${fmtKg(lm.prior)}kg ${lm.diff !== null ? `<span class="${lm.diff < -0.3 ? 'dev-neg' : ''}">${lm.diff >= 0 ? '+' : ''}${lm.diff.toFixed(2)}kg</span>` : ''}（n=${lm.nRecent}/${lm.nPrior}）` },
+    { name: '収支（7日平均・Garmin推定）', value: w.energy.deficit !== null ? `${Math.round(w.energy.deficit)}<small> kcal赤字/日</small>` : '—', ref: `摂取 ${w.energy.kcalIn !== null ? Math.round(w.energy.kcalIn) : '—'} / 消費 ${w.energy.kcalOut !== null ? Math.round(w.energy.kcalOut) : '—'}（目標赤字${w.energy.target}・n=${w.energy.n}）${w.energy.expectedKgWeek !== null ? `<br>理論ペース ${w.energy.expectedKgWeek >= 0 ? '+' : ''}${w.energy.expectedKgWeek.toFixed(2)}kg/週` : ''}` },
+    { name: 'タンパク質（7日平均）', value: w.energy.protein.mean !== null ? `${Math.round(w.energy.protein.mean)}<small> g</small>` : '—', ref: `目標${w.energy.protein.target}g（n=${w.energy.protein.n}）` },
+    { name: '歩数（7日平均）', value: w.activity.steps7 !== null ? `${Math.round(w.activity.steps7).toLocaleString()}<small> 歩</small>` : '—', ref: `基準線 ${w.activity.stepsBase.mean !== null ? Math.round(w.activity.stepsBase.mean).toLocaleString() : '—'}歩（n=${w.activity.stepsBase.n}/${L.BASELINE_DAYS}）${w.activity.stepsDev !== null ? ` <span class="${w.activity.stepsDev >= 0 ? 'dev-pos' : 'dev-neg'}">${fmtDev(w.activity.stepsDev)}</span>` : ''}${w.activity.kcalActive7 !== null ? `<br>活動kcal ${Math.round(w.activity.kcalActive7)}/日` : ''}` },
+  ];
+
+  const ex = entries.find(e => e.date === today);
+  view().innerHTML = `<div class="card">
+    <h2>減量モニター（${asOf}）</h2>
+    <div class="chip-row">${chip('ペース', w.pace.state)}${chip('体組成', w.composition.state)}${chip('収支', w.energy.state)}${chip('タンパク質', w.energy.protein.state)}${chip('活動量', w.activity.state)}</div>
+    <div class="status-line">${weightLine}</div>
+    ${staleHtml}
+    <div class="comment-line"><span class="label">減量ペース:</span> ${esc(w.pace.reason)}</div>
+    <div class="comment-line"><span class="label">体組成の質:</span> ${esc(w.composition.reason)}</div>
+    <div class="comment-line"><span class="label">収支:</span> ${esc(w.energy.reason)}</div>
+    <div class="comment-line"><span class="label">活動量:</span> ${esc(w.activity.reason)}</div>
+    <p class="muted" style="margin-top:6px">判定軸は「減量ペース」（月2kg超の急減禁止）と「体組成の質」（脂肪↓・除脂肪維持）。収支・タンパク質・活動量は補助。浮腫日・基準線除外日は算入しない。</p>
+    <button class="btn secondary" id="copy-loss">全文コピー</button>
+  </div>
+  <div class="card">
+    <h2>食事クイック入力（既存の値は消えない）</h2>
+    <div class="field-row">
+      <label class="field">日付<input type="date" id="q-date" value="${today}"></label>
+      <label class="field">摂取kcal<input type="number" step="any" id="q-kcalin" value="${ex && typeof ex.kcalIn === 'number' ? ex.kcalIn : ''}"></label>
+      <label class="field">タンパク質 (g)<input type="number" step="any" id="q-protein" value="${ex && typeof ex.protein === 'number' ? ex.protein : ''}"></label>
+    </div>
+    <button class="btn" id="q-save">保存</button>
+    <p class="muted" style="margin-top:6px">空欄の項目は変更しない。値の消去は「記録」タブで行う。</p>
+    <div class="result" id="q-result"></div>
+  </div>
+  <div class="metric-grid">${cards.map(c => `<div class="metric-card"><div class="name">${c.name}</div><div class="value">${c.value}</div><div class="ref">${c.ref}</div></div>`).join('')}</div>
+  <div class="card" style="margin-top:12px">
+    <h2>体重 直近12週</h2>
+    <div id="loss-chart"></div>
+    <p class="muted" style="margin-top:6px">点＝実測（黄＝浮腫日・灰＝基準線除外日）、実線＝7日移動平均（浮腫・除外日を除く）、点線＝目標体重</p>
+  </div>`;
+  $('#copy-loss').addEventListener('click', e => copyText(text, e.target));
+  $('#q-date').addEventListener('change', async () => {
+    const d = $('#q-date').value;
+    const e = (await getAllEntries()).find(x => x.date === d);
+    $('#q-kcalin').value = e && typeof e.kcalIn === 'number' ? e.kcalIn : '';
+    $('#q-protein').value = e && typeof e.protein === 'number' ? e.protein : '';
+  });
+  $('#q-save').addEventListener('click', async () => {
+    const out = $('#q-result');
+    const num = id => { const t = $(id).value.trim(); return t === '' ? null : +t; };
+    const rec = { date: $('#q-date').value, kcalIn: num('#q-kcalin'), protein: num('#q-protein') };
+    if (rec.kcalIn === null && rec.protein === null) { out.textContent = '摂取kcalかタンパク質を入力'; out.className = 'result err'; return; }
+    const existing = await getAllEntries();
+    const res = L.parseImport(JSON.stringify([rec]), existing, { merge: true }); // マージ＝自動取得値・手入力を保全
+    if (res.errors.length) { out.textContent = res.errors.map(e => e.reason).join('\n'); out.className = 'result err'; return; }
+    await putEntries(res.entries);
+    out.textContent = `保存しました（${rec.date}）`; out.className = 'result ok';
+    await renderLoss();
+    $('#q-result').textContent = `保存しました（${rec.date}）`; $('#q-result').className = 'result ok';
+  });
+  drawWeightChart(entries, asOf, opts.goalWeight);
+}
+
+/* 体重チャート（12週固定）: 実測点＋7日移動平均＋目標体重点線。drawChart（推移タブ）とは独立 */
+function drawWeightChart(entries, asOf, goalWeight) {
+  const wrap = $('#loss-chart');
+  const weeks = 12;
+  const endNum = L.dateToNum(asOf);
+  const startNum = endNum - weeks * 7 + 1;
+  const pts = entries
+    .filter(e => L.dateToNum(e.date) >= startNum && L.dateToNum(e.date) <= endNum && typeof e.weight === 'number')
+    .map(e => ({ x: L.dateToNum(e.date) - startNum, y: e.weight, date: e.date, edema: e.edema === true, excluded: L.isExcludedFromBaseline(e) }));
+  if (!pts.length) { wrap.innerHTML = '<p class="muted">この期間の体重記録なし</p>'; return; }
+  const ma = L.movingAverageSeries(entries, asOf, 'weight', weeks, 7);
+  const W = 680, H = 300, PL = 46, PR = 12, PT = 12, PB = 30;
+  const xMax = weeks * 7 - 1;
+  const ys = pts.map(p => p.y).concat(ma.map(p => p.y));
+  if (typeof goalWeight === 'number') ys.push(goalWeight);
+  let yMin = Math.min(...ys), yMax = Math.max(...ys);
+  const pad = (yMax - yMin) * 0.1 || 1; yMin -= pad; yMax += pad;
+  const X = x => PL + x / xMax * (W - PL - PR);
+  const Y = y => PT + (1 - (y - yMin) / (yMax - yMin)) * (H - PT - PB);
+  let svg = `<svg viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg">`;
+  for (let i = 0; i <= 4; i++) {
+    const yv = yMin + (yMax - yMin) * i / 4;
+    svg += `<line x1="${PL}" y1="${Y(yv)}" x2="${W - PR}" y2="${Y(yv)}" stroke="#334155" stroke-width="1"/>`;
+    svg += `<text x="${PL - 6}" y="${Y(yv) + 4}" fill="#94a3b8" font-size="11" text-anchor="end">${yv.toFixed(1)}</text>`;
+  }
+  for (let wk = 0; wk <= weeks; wk += 2) {
+    const x = Math.min(wk * 7, xMax);
+    const d = new Date((startNum + x) * 86400000);
+    svg += `<text x="${X(x)}" y="${H - 8}" fill="#94a3b8" font-size="11" text-anchor="middle">${d.getUTCMonth() + 1}/${d.getUTCDate()}</text>`;
+  }
+  if (typeof goalWeight === 'number') {
+    svg += `<line x1="${PL}" y1="${Y(goalWeight)}" x2="${W - PR}" y2="${Y(goalWeight)}" stroke="#5eead4" stroke-width="1.5" stroke-dasharray="6 4"/>`;
+    svg += `<text x="${W - PR}" y="${Y(goalWeight) - 5}" fill="#5eead4" font-size="11" text-anchor="end">目標 ${goalWeight.toFixed(1)}</text>`;
+  }
+  if (ma.length > 1) {
+    // 記録が7日以上途切れた区間（移動平均が存在しない日をまたぐ）は線をつながない
+    const path = ma.map((p, i) => `${i === 0 || p.x - ma[i - 1].x > 1 ? 'M' : 'L'}${X(p.x).toFixed(1)},${Y(p.y).toFixed(1)}`).join(' ');
+    svg += `<path d="${path}" fill="none" stroke="#e2e8f0" stroke-width="2"/>`;
+  }
+  for (const p of pts) {
+    const fill = p.edema ? '#fbbf24' : p.excluded ? '#64748b' : '#94a3b8';
+    svg += `<circle cx="${X(p.x).toFixed(1)}" cy="${Y(p.y).toFixed(1)}" r="3" fill="${fill}"><title>${p.date}: ${p.y}kg${p.edema ? '（浮腫）' : ''}${p.excluded ? '（除外）' : ''}</title></circle>`;
+  }
+  svg += `</svg>`;
+  wrap.innerHTML = svg;
 }
 
 /* ================= 起動 ================= */

@@ -1,7 +1,12 @@
 #!/usr/bin/env python3
 """Garmin Connect＋OMRON connectから日次データを取得し、アプリ取込用JSONを生成する。
 
-- Garmin: sleep/rhr/bb/hrv、OMRON: weight/fat/muscle/visceral（体組成）。
+- Garmin: sleep/rhr/bb/hrv＋活動量 steps/kcalOut/kcalActive（v1.4.0〜）、
+  OMRON: weight/fat/muscle/visceral（体組成）。
+  活動量は当日分を常にnullにする（9:30時点は日中途中の部分値のため）。前日以前は
+  ローリング7日再配信＋マージ取込（非nullのみ上書き）で翌日以降に確定値へ自己修正される。
+  kcalIn/protein（摂取kcal・タンパク質）は手入力専用のため常にnull（数値を出すと
+  マージで手入力を潰す）。
   取込が同一日付を丸ごと置換する仕様のため、両者を同一エントリにマージして
   1ファイル/日で出力する（別ファイルにすると互いのデータを消し合う）
 - OMRONは未認証・取得失敗時はスキップしGarmin分のみで続行する（omron_client.py参照）
@@ -49,6 +54,8 @@ def empty_entry(date):
     return {
         "date": date, "hrv": None, "rhr": None, "sleep": None, "bb": None,
         "weight": None, "mood": None, "fat": None, "muscle": None, "visceral": None,
+        "steps": None, "kcalOut": None, "kcalActive": None,  # Garmin活動量（v1.4.0）
+        "kcalIn": None, "protein": None,  # 手入力専用。ここでは常にNone
         "confounds": [], "excludeBaseline": False, "edema": False, "note": "",
     }
 
@@ -80,6 +87,14 @@ def fetch_rhr(api, d):
 def fetch_hrv(api, d):
     js = api.get_hrv_data(d) or {}
     return (js.get("hrvSummary") or {}).get("lastNightAvg")
+
+
+def fetch_activity(api, d):
+    """日次サマリーから 歩数 / 総消費kcal / 活動kcal（いずれもGarmin推定）"""
+    js = api.get_user_summary(d) or {}
+    to_int = lambda v: int(round(v)) if isinstance(v, (int, float)) else None
+    return (to_int(js.get("totalSteps")), to_int(js.get("totalKilocalories")),
+            to_int(js.get("activeKilocalories")))
 
 
 def merge_omron(entries_by_date, start, today, prev_delivered):
@@ -164,7 +179,9 @@ def main():
         rhr = safe(fetch_rhr, api, ds)
         e["rhr"] = int(round(rhr)) if rhr is not None else None  # APIはfloatで返す
         e["hrv"] = safe(fetch_hrv, api, ds)
-        got = {k: e[k] for k in ("sleep", "rhr", "hrv", "bb")}
+        if d < today:  # 当日は日中途中の部分値になるため出力しない（翌日以降の再配信で確定）
+            e["steps"], e["kcalOut"], e["kcalActive"] = safe(fetch_activity, api, ds) or (None, None, None)
+        got = {k: e[k] for k in ("sleep", "rhr", "hrv", "bb", "steps", "kcalOut", "kcalActive")}
         if any(v is not None for v in got.values()):
             entries_by_date[ds] = e
             log(f"  {ds}: {got}")

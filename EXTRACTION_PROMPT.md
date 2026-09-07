@@ -10,8 +10,8 @@ claude.ai の専用プロジェクト（例:「トラッカー日次取込」）
 ## 出力仕様
 
 - コードブロックで**JSON配列のみ**を出力する。前置き・解説・確認の復唱は不要
-- キーは次の14個で固定（省略しない）:
-  `date, hrv, rhr, sleep, bb, weight, mood, fat, muscle, visceral, confounds, excludeBaseline, edema, note`
+- キーは次の19個で固定（省略しない）:
+  `date, hrv, rhr, sleep, bb, weight, mood, fat, muscle, visceral, steps, kcalOut, kcalActive, kcalIn, protein, confounds, excludeBaseline, edema, note`
 
 ## フィールド定義
 
@@ -26,6 +26,11 @@ claude.ai の専用プロジェクト（例:「トラッカー日次取込」）
 | fat | 体脂肪率 (%) | オムロン |
 | muscle | 骨格筋率 (%) | オムロン |
 | visceral | 内臓脂肪レベル | オムロン |
+| steps | 歩数（その日の合計） | Garmin |
+| kcalOut | 総消費カロリー kcal（Garmin推定） | Garmin |
+| kcalActive | 活動カロリー kcal | Garmin |
+| kcalIn | 摂取カロリー kcal | ユーザーの発言のみ |
+| protein | タンパク質 g | ユーザーの発言のみ |
 | mood | 寝起きの気分 1〜5 | ユーザーの発言のみ |
 | confounds | "alcohol"/"golf"/"travel"/"sick" の配列 | ユーザーの発言のみ |
 | excludeBaseline | 基準線除外フラグ | ユーザーの明示指示のみ |
@@ -37,7 +42,8 @@ claude.ai の専用プロジェクト（例:「トラッカー日次取込」）
 1. **推測補完の禁止。** スクショから読み取れない値は null。曖昧な数字は埋めずにその旨を1行添えて null にする
 2. **日付はスクショ内の表記が正。** 読み取れない場合はユーザーに日付を確認してから出力する（今日の日付と勝手に推定しない）
 3. 単位換算・丸め直しはしない。表示されている値をそのまま使う
-4. mood・confounds・note はスクショから抽出しない。ユーザーが言及した場合のみ設定（mood未言及=null、confounds未言及=[]）
+4. mood・kcalIn・protein・confounds・note はスクショから抽出しない。ユーザーが言及した場合のみ設定（未言及=null、confounds未言及=[]）
+5. steps/kcalOut/kcalActive は当日途中のスクショなら null（1日の確定値のみ採用）
 5. excludeBaseline・edema は明示指示がなければ false
 6. 複数日分のスクショが貼られた場合は日付ごとに1オブジェクト、日付昇順の配列にする
 7. deep（深睡眠）・water（体水分率）は出力しない（廃止済みフィールド）
@@ -45,5 +51,5 @@ claude.ai の専用プロジェクト（例:「トラッカー日次取込」）
 ## 出力例
 
 ```json
-[{"date":"2026-07-08","hrv":34,"rhr":null,"sleep":72,"bb":48,"weight":null,"mood":null,"fat":null,"muscle":null,"visceral":null,"confounds":[],"excludeBaseline":false,"edema":false,"note":""}]
+[{"date":"2026-07-08","hrv":34,"rhr":null,"sleep":72,"bb":48,"weight":null,"mood":null,"fat":null,"muscle":null,"visceral":null,"steps":null,"kcalOut":null,"kcalActive":null,"kcalIn":null,"protein":null,"confounds":[],"excludeBaseline":false,"edema":false,"note":""}]
 ```

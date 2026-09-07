@@ -1,4 +1,4 @@
-/* RF基準線トラッカー コアロジック（要件定義書 v1.0 §4 準拠・現行v1.2移植）
+/* RF基準線トラッカー コアロジック（要件定義書 v1.0 §4 準拠・現行v1.2移植。v1.4.0で減量モニタリング層を追加）
  * 純関数のみ。ブラウザ(window.RFLogic)とNode(module.exports)の両方で動く。 */
 (function (root, factory) {
   if (typeof module === 'object' && module.exports) module.exports = factory();
@@ -6,7 +6,10 @@
 })(typeof self !== 'undefined' ? self : this, function () {
   'use strict';
 
-  const NUMERIC_FIELDS = ['hrv', 'rhr', 'sleep', 'bb', 'weight', 'mood', 'fat', 'muscle', 'visceral'];
+  // v1.4.0: steps/kcalOut/kcalActive（Garmin活動量）・kcalIn/protein（手入力）を後方互換で追加。
+  // 旧JSON（キーなし）はnull扱いで受理、旧アプリは未知キーを無視するため双方向に安全
+  const NUMERIC_FIELDS = ['hrv', 'rhr', 'sleep', 'bb', 'weight', 'mood', 'fat', 'muscle', 'visceral',
+    'steps', 'kcalOut', 'kcalActive', 'kcalIn', 'protein'];
   const CONFOUNDS = ['alcohol', 'golf', 'travel', 'sick'];
   const IGNORED_KEYS = ['deep', 'water']; // v1.0旧スキーマ互換: 無視して受理
   const BASELINE_DAYS = 28;
@@ -215,7 +218,10 @@
     const out = sorted.map(e => ({
       date: e.date, hrv: e.hrv, rhr: e.rhr, sleep: e.sleep, bb: e.bb,
       weight: e.weight, mood: e.mood, fat: e.fat, muscle: e.muscle,
-      visceral: e.visceral, confounds: e.confounds,
+      visceral: e.visceral,
+      steps: e.steps ?? null, kcalOut: e.kcalOut ?? null, kcalActive: e.kcalActive ?? null,
+      kcalIn: e.kcalIn ?? null, protein: e.protein ?? null,
+      confounds: e.confounds,
       excludeBaseline: e.excludeBaseline, edema: e.edema, note: e.note
     }));
     return JSON.stringify(out, null, 1);
@@ -428,11 +434,15 @@
     lines.push(`体脂肪率: ${fmt(avg('fat'), 1)} %`);
     lines.push(`骨格筋率: ${fmt(avg('muscle'), 1)} %`);
     lines.push(`気分: ${fmt(avg('mood'), 2)}`);
+    lines.push(`歩数: ${fmt(avg('steps'), 0)}`);
+    lines.push(`消費kcal(Garmin推定): ${fmt(avg('kcalOut'), 0)} / 活動kcal: ${fmt(avg('kcalActive'), 0)}`);
+    lines.push(`摂取kcal: ${fmt(avg('kcalIn'), 0)} / タンパク質: ${fmt(avg('protein'), 0)} g`);
     lines.push(`交絡: ` + CONFOUNDS.map(c => `${c} ${confCount[c]}日`).join(' / '));
     lines.push(`浮腫検出: ${inMonth.filter(e => e.edema).length}日 / 基準線除外: ${inMonth.filter(e => isExcludedFromBaseline(e)).length}日`);
     lines.push('');
     lines.push('--- TSV（スプレッドシート転記用） ---');
-    const cols = ['date', 'hrv', 'rhr', 'sleep', 'bb', 'weight', 'mood', 'fat', 'muscle', 'visceral', 'confounds', 'excludeBaseline', 'edema', 'note'];
+    const cols = ['date', 'hrv', 'rhr', 'sleep', 'bb', 'weight', 'mood', 'fat', 'muscle', 'visceral',
+      'steps', 'kcalOut', 'kcalActive', 'kcalIn', 'protein', 'confounds', 'excludeBaseline', 'edema', 'note'];
     lines.push(cols.join('\t'));
     for (const e of inMonth) {
       lines.push(cols.map(c => {
@@ -446,8 +456,243 @@
     return lines.join('\n');
   }
 
+
+  /* ===== v1.4.0 減量モニタリング（表示レイヤー追加・コアロジック§4は不変更） =====
+   * 判定軸は「減量ペース」と「体組成の質」。補助として収支（Garmin推定）・タンパク質・活動量。
+   * すべての軸に insufficient（判定保留）を持たせ、データ不足時に推測しない。 */
+  const WL_DEFAULTS = { deficitTarget: 500, proteinTarget: 150 };
+  const WL_THRESHOLDS = {
+    paceFast: -0.5,      // kg/週。≈月2kg超（基準線ドキュメント「月2kg超の急減禁止」）
+    paceGood: -0.15,     // kg/週。これより緩いと停滞
+    monthlyFast: -2.0,   // 28日平均 vs 前28日平均の差（kg）
+    compDelta: 0.3,      // 脂肪量・除脂肪量の28日平均差の判定幅（kg）
+    deficitLow: 0.7, deficitHigh: 1.4, // 目標赤字に対する許容比
+    proteinOk: 0.9,      // 目標タンパク質に対する許容比
+    activityDev: 10,     // 歩数7日平均の基準線比（%）
+    paceMinN: 6, paceMinSpan: 14, compMinN: 4, energyMinN: 3, stepsMinN: 4
+  };
+  const WL_LABELS = {
+    pace: { fast: '急減', good: '適正', stall: '停滞', gain: '増加', insufficient: '判定保留' },
+    composition: { good: '良質', lean_loss: '除脂肪減', flat: '横ばい', fat_gain: '脂肪増', insufficient: '判定保留' },
+    energy: { on: '目標圏内', below: '赤字不足', above: '赤字過大', insufficient: '判定保留' },
+    protein: { ok: '充足', low: '不足', insufficient: '判定保留' },
+    activity: { up: '増加', flat: '横ばい', down: '低下', insufficient: '判定保留' }
+  };
+
+  /* 当日を含む直近days日の値配列。pickは指標名または fn(entry)->number|null。
+   * opts.excludeFlagged=true で edema / excludeBaseline / sick の日を除外 */
+  function windowValues(entries, dateStr, days, pick, opts) {
+    const end = dateToNum(dateStr) + 1; // exclusive（当日含む）
+    const start = end - days;
+    const excl = !!(opts && opts.excludeFlagged);
+    const f = typeof pick === 'function' ? pick : e => e[pick];
+    const out = [];
+    for (const e of entries) {
+      const d = dateToNum(e.date);
+      if (d < start || d >= end) continue;
+      if (excl && (e.edema === true || isExcludedFromBaseline(e))) continue;
+      const v = f(e);
+      if (typeof v === 'number' && isFinite(v)) out.push({ date: e.date, x: d - start, v });
+    }
+    return out;
+  }
+
+  /* 最小二乗勾配（単位: v/日）×7 = v/週。点が2未満または x が全同一なら null */
+  function slopePerWeek(points) {
+    const n = points.length;
+    if (n < 2) return null;
+    const mx = points.reduce((a, p) => a + p.x, 0) / n;
+    const my = points.reduce((a, p) => a + p.v, 0) / n;
+    let sxx = 0, sxy = 0;
+    for (const p of points) { sxx += (p.x - mx) ** 2; sxy += (p.x - mx) * (p.v - my); }
+    if (sxx === 0) return null;
+    return sxy / sxx * 7;
+  }
+
+  const meanOf = a => a.length ? a.reduce((x, y) => x + y, 0) / a.length : null;
+  const fatMassOf = e => (typeof e.weight === 'number' && typeof e.fat === 'number') ? e.weight * e.fat / 100 : null;
+  const leanMassOf = e => (typeof e.weight === 'number' && typeof e.fat === 'number') ? e.weight * (100 - e.fat) / 100 : null;
+  const sgn = v => (v >= 0 ? '+' : '') + v.toFixed(2);
+
+  /* 28日平均 vs 前28日平均（派生値対応版。除外日・浮腫日を除く） */
+  function derivedWindowTrend(entries, dateStr, fn, minN) {
+    const recent = windowValues(entries, dateStr, 28, fn, { excludeFlagged: true }).map(p => p.v);
+    const end = dateToNum(dateStr) + 1;
+    const prior = [];
+    for (const e of entries) {
+      const d = dateToNum(e.date);
+      if (d < end - 56 || d >= end - 28) continue;
+      if (e.edema === true || isExcludedFromBaseline(e)) continue;
+      const v = fn(e);
+      if (typeof v === 'number' && isFinite(v)) prior.push(v);
+    }
+    const r = { recent: meanOf(recent), prior: meanOf(prior), diff: null, nRecent: recent.length, nPrior: prior.length };
+    if (recent.length >= minN && prior.length >= minN) r.diff = r.recent - r.prior;
+    return r;
+  }
+
+  /* 減量モニタリング判定。opts: { goalWeight, deficitTarget, proteinTarget }（未設定はWL_DEFAULTS） */
+  function weightLossStatus(entries, dateStr, opts) {
+    const T = WL_THRESHOLDS;
+    const goalWeight = opts && typeof opts.goalWeight === 'number' ? opts.goalWeight : null;
+    const deficitTarget = opts && typeof opts.deficitTarget === 'number' ? opts.deficitTarget : WL_DEFAULTS.deficitTarget;
+    const proteinTarget = opts && typeof opts.proteinTarget === 'number' ? opts.proteinTarget : WL_DEFAULTS.proteinTarget;
+    const today = dateToNum(dateStr);
+
+    // 最新実測体重（当日以前）
+    let latest = null;
+    for (let i = entries.length - 1; i >= 0; i--) {
+      const e = entries[i];
+      if (typeof e.weight === 'number' && dateToNum(e.date) <= today) { latest = { weight: e.weight, date: e.date, edema: e.edema === true }; break; }
+    }
+    const remaining = latest && goalWeight !== null ? latest.weight - goalWeight : null;
+
+    // --- ペース: 28日窓のOLS勾配（kg/週）。疎データでも単発の水分変動に引きずられにくい ---
+    const pace = { state: 'insufficient', slopeKgWeek: null, n: 0, spanDays: 0, monthly: null, monthlyFast: false, reason: '' };
+    {
+      const pts = windowValues(entries, dateStr, 28, 'weight', { excludeFlagged: true });
+      pace.n = pts.length;
+      pace.spanDays = pts.length ? pts[pts.length - 1].x - pts[0].x : 0;
+      pace.monthly = windowTrend(entries, dateStr, 'weight');
+      if (pace.monthly && pace.monthly.diff <= T.monthlyFast) pace.monthlyFast = true;
+      if (pts.length >= T.paceMinN && pace.spanDays >= T.paceMinSpan) {
+        const s = slopePerWeek(pts);
+        pace.slopeKgWeek = s;
+        if (s !== null) {
+          if (s <= T.paceFast) pace.state = 'fast';
+          else if (s <= T.paceGood) pace.state = 'good';
+          else if (s < -T.paceGood) pace.state = 'stall';
+          else pace.state = 'gain';
+        }
+      }
+      if (pace.monthlyFast && pace.state !== 'insufficient') pace.state = 'fast';
+      if (pace.state === 'insufficient') {
+        pace.reason = `直近28日の有効体重が${pace.n}件（期間${pace.spanDays}日）。判定には6件以上・14日以上が必要。`;
+        if (pace.monthlyFast) pace.reason += ` 28日平均は前28日比 ${pace.monthly.diff.toFixed(1)}kg と月2kgルール超過。`;
+      } else {
+        const s = pace.slopeKgWeek;
+        pace.reason = `28日窓の傾き ${sgn(s)}kg/週（n=${pace.n}）。`;
+        if (pace.state === 'fast') pace.reason += pace.monthlyFast ? `28日平均が前28日比 ${pace.monthly.diff.toFixed(1)}kg で月2kg超の急減。ペースを緩める。` : '月2kg超に相当する急減。ペースを緩める。';
+        else if (pace.state === 'good') pace.reason += '月0.6〜2kgの範囲で適正。';
+        else if (pace.state === 'stall') pace.reason += '停滞圏。収支と活動量を確認。';
+        else pace.reason += '増加傾向。';
+      }
+    }
+
+    // --- 体組成の質: 脂肪量・除脂肪量の28日平均 vs 前28日平均 ---
+    const composition = { state: 'insufficient', fatMass: null, leanMass: null, reason: '' };
+    {
+      const fm = derivedWindowTrend(entries, dateStr, fatMassOf, T.compMinN);
+      const lm = derivedWindowTrend(entries, dateStr, leanMassOf, T.compMinN);
+      composition.fatMass = fm; composition.leanMass = lm;
+      if (fm.diff !== null && lm.diff !== null) {
+        if (fm.diff <= -T.compDelta && lm.diff >= -T.compDelta) composition.state = 'good';
+        else if (fm.diff <= -T.compDelta && lm.diff < -T.compDelta) composition.state = 'lean_loss';
+        else if (fm.diff >= T.compDelta) composition.state = 'fat_gain';
+        else composition.state = 'flat';
+        composition.reason = `脂肪量 ${sgn(fm.diff)}kg・除脂肪量 ${sgn(lm.diff)}kg（直近28日平均 vs 前28日、n=${fm.nRecent}/${fm.nPrior}）。`;
+        if (composition.state === 'good') composition.reason += '脂肪が減り除脂肪量は維持。';
+        else if (composition.state === 'lean_loss') composition.reason += '除脂肪量が落ちている。タンパク質と筋トレ量を確認。';
+        else if (composition.state === 'fat_gain') composition.reason += '脂肪量が増加。';
+        else composition.reason += '有意な変化なし。';
+      } else {
+        composition.reason = `体重・体脂肪率が揃う日が直近28日 ${fm.nRecent}件／前28日 ${fm.nPrior}件。各窓4件以上が必要。`;
+      }
+    }
+
+    // --- 収支（Garmin推定消費 − 摂取。直近7日で両方ある日） ---
+    const energy = { state: 'insufficient', kcalIn: null, kcalOut: null, deficit: null, n: 0, expectedKgWeek: null, target: deficitTarget, protein: { state: 'insufficient', mean: null, n: 0, target: proteinTarget }, reason: '' };
+    {
+      const both = windowValues(entries, dateStr, 7, e => (typeof e.kcalIn === 'number' && typeof e.kcalOut === 'number') ? e.kcalOut - e.kcalIn : null);
+      energy.n = both.length;
+      const ins = windowValues(entries, dateStr, 7, 'kcalIn').map(p => p.v);
+      const outs = windowValues(entries, dateStr, 7, 'kcalOut').map(p => p.v);
+      energy.kcalIn = meanOf(ins); energy.kcalOut = meanOf(outs);
+      if (both.length >= T.energyMinN) {
+        energy.deficit = meanOf(both.map(p => p.v));
+        energy.expectedKgWeek = -energy.deficit * 7 / 7700;
+        if (energy.deficit < T.deficitLow * deficitTarget) energy.state = 'below';
+        else if (energy.deficit > T.deficitHigh * deficitTarget) energy.state = 'above';
+        else energy.state = 'on';
+        energy.reason = `7日平均 赤字 ${Math.round(energy.deficit)}kcal/日（目標${deficitTarget}・n=${both.length}・消費はGarmin推定）。理論ペース ${sgn(energy.expectedKgWeek)}kg/週。`;
+      } else {
+        energy.reason = `摂取と消費が揃う日が直近7日で${both.length}件。3件以上が必要。`;
+      }
+      const pr = windowValues(entries, dateStr, 7, 'protein').map(p => p.v);
+      energy.protein.n = pr.length; energy.protein.mean = meanOf(pr);
+      if (pr.length >= T.energyMinN) {
+        energy.protein.state = energy.protein.mean >= T.proteinOk * proteinTarget ? 'ok' : 'low';
+      }
+    }
+
+    // --- 活動量: 歩数7日平均 vs 28日基準線 ---
+    const activity = { state: 'insufficient', steps7: null, stepsBase: null, stepsDev: null, kcalActive7: null, reason: '' };
+    {
+      const st = windowValues(entries, dateStr, 7, 'steps').map(p => p.v);
+      activity.steps7 = meanOf(st);
+      activity.kcalActive7 = meanOf(windowValues(entries, dateStr, 7, 'kcalActive').map(p => p.v));
+      activity.stepsBase = baseline(entries, dateStr, 'steps');
+      if (st.length >= T.stepsMinN && activity.stepsBase.n >= MIN_N) {
+        activity.stepsDev = deviationPct(activity.steps7, activity.stepsBase.mean);
+        if (activity.stepsDev === null) activity.state = 'insufficient';
+        else if (activity.stepsDev >= T.activityDev) activity.state = 'up';
+        else if (activity.stepsDev <= -T.activityDev) activity.state = 'down';
+        else activity.state = 'flat';
+        activity.reason = `歩数7日平均 ${Math.round(activity.steps7)}歩（基準線 ${Math.round(activity.stepsBase.mean)}歩比 ${activity.stepsDev >= 0 ? '+' : ''}${activity.stepsDev.toFixed(1)}%）。`;
+      } else {
+        activity.reason = `歩数が直近7日 ${st.length}件／基準線 n=${activity.stepsBase.n}。7日4件以上・基準線7件以上が必要。`;
+      }
+    }
+
+    return { date: dateStr, goalWeight, latest, remaining, pace, composition, energy, activity };
+  }
+
+  /* 減量モニターの全文テキスト（コピー用・statusHeaderTextと同形式） */
+  function weightLossText(entries, dateStr, opts) {
+    const w = weightLossStatus(entries, dateStr, opts);
+    const lines = [];
+    lines.push(`【減量モニター ${dateStr}】`);
+    if (w.latest) {
+      let l = `体重: ${w.latest.weight.toFixed(1)}kg（${w.latest.date}実測${w.latest.edema ? '・浮腫' : ''}）`;
+      if (w.goalWeight !== null) l += w.remaining > 0 ? ` 目標${w.goalWeight.toFixed(1)}kgまで残り${w.remaining.toFixed(1)}kg` : ` 目標${w.goalWeight.toFixed(1)}kg達成`;
+      lines.push(l);
+    } else {
+      lines.push('体重: 記録なし');
+    }
+    lines.push(`減量ペース: ${WL_LABELS.pace[w.pace.state]} — ${w.pace.reason}`);
+    lines.push(`体組成の質: ${WL_LABELS.composition[w.composition.state]} — ${w.composition.reason}`);
+    lines.push(`収支: ${WL_LABELS.energy[w.energy.state]} — ${w.energy.reason}`);
+    const p = w.energy.protein;
+    lines.push(`タンパク質: ${WL_LABELS.protein[p.state]}${p.mean !== null ? ` — 7日平均 ${Math.round(p.mean)}g（目標${p.target}g・n=${p.n}）` : ''}`);
+    lines.push(`活動量: ${WL_LABELS.activity[w.activity.state]} — ${w.activity.reason}`);
+    return lines.join('\n');
+  }
+
+  /* チャート用の移動平均系列。直近weeks週で、各日について当日を含む直近maDays日の平均
+   * （浮腫・除外日は算入しない）。値がある日のみ返す。x は期間先頭からの日数 */
+  function movingAverageSeries(entries, dateStr, metric, weeks, maDays) {
+    const ma = maDays || 7;
+    const end = dateToNum(dateStr);
+    const start = end - weeks * 7 + 1;
+    const byDay = new Map();
+    for (const e of entries) {
+      if (e.edema === true || isExcludedFromBaseline(e)) continue;
+      const v = e[metric];
+      if (typeof v === 'number' && isFinite(v)) byDay.set(dateToNum(e.date), v);
+    }
+    const out = [];
+    for (let d = start; d <= end; d++) {
+      const vals = [];
+      for (let k = d - ma + 1; k <= d; k++) if (byDay.has(k)) vals.push(byDay.get(k));
+      if (vals.length) out.push({ x: d - start, y: meanOf(vals), n: vals.length });
+    }
+    return out;
+  }
+
   return {
     NUMERIC_FIELDS, CONFOUNDS, BASELINE_DAYS, MIN_N, FAILURE_MODES,
+    WL_DEFAULTS, WL_THRESHOLDS, WL_LABELS,
+    windowValues, slopePerWeek, weightLossStatus, weightLossText, movingAverageSeries,
     CONDITION_LABELS, SIGNAL_LABELS,
     dateToNum, isValidDateStr, isExcludedFromBaseline,
     baseline, deviationPct, recovery, moodTrack, detectEdema,
