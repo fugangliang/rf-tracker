@@ -78,5 +78,20 @@
     }
   }
 
-  return { ENC_FILE, b64urlToBytes, bytesToB64url, parseSetup, decryptEnvelope, encryptEnvelope, fetchEnvelope };
+  /* 復号後の平文を解釈。v1: エントリ配列のJSON文字列。v2: {v:2, entries:[...], advice:{date,text,generatedAt}|null}
+   * 返り値: { entriesText: string(配列JSON), advice: object|null } */
+  function parsePayload(text) {
+    const data = JSON.parse(text);
+    if (Array.isArray(data)) return { entriesText: text, advice: null };
+    if (data && typeof data === 'object' && Array.isArray(data.entries)) {
+      const a = data.advice;
+      const advice = a && typeof a === 'object' && typeof a.text === 'string' && a.text.trim()
+        ? { date: typeof a.date === 'string' ? a.date : null, text: a.text, generatedAt: typeof a.generatedAt === 'string' ? a.generatedAt : null }
+        : null;
+      return { entriesText: JSON.stringify(data.entries), advice };
+    }
+    throw new Error('ペイロード形式が不正');
+  }
+
+  return { ENC_FILE, b64urlToBytes, bytesToB64url, parseSetup, decryptEnvelope, encryptEnvelope, fetchEnvelope, parsePayload };
 });

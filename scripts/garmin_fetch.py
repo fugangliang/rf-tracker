@@ -59,6 +59,7 @@ def empty_entry(date):
         "weight": None, "mood": None, "fat": None, "muscle": None, "visceral": None,
         "steps": None, "kcalOut": None, "kcalActive": None,  # Garmin活動量（v1.4.0）
         "kcalIn": None, "protein": None,  # Garmin Connect+ 栄養トラッキング（食事ログなしはNone）
+        "stress": None, "stressHighMin": None,  # Garmin 日中ストレス（v1.6.0・負荷の代理変数）
         "confounds": [], "excludeBaseline": False, "edema": False, "note": "",
     }
 
@@ -93,11 +94,15 @@ def fetch_hrv(api, d):
 
 
 def fetch_activity(api, d):
-    """日次サマリーから 歩数 / 総消費kcal / 活動kcal（いずれもGarmin推定）"""
+    """日次サマリーから 歩数 / 総消費kcal / 活動kcal / 平均ストレス / 高ストレス分（いずれもGarmin推定）"""
     js = api.get_user_summary(d) or {}
     to_int = lambda v: int(round(v)) if isinstance(v, (int, float)) else None
+    stress = js.get("averageStressLevel")
+    stress = to_int(stress) if isinstance(stress, (int, float)) and stress >= 0 else None  # 未計測は-1
+    high = js.get("highStressDuration")
+    high_min = int(round(high / 60)) if isinstance(high, (int, float)) and high >= 0 else None
     return (to_int(js.get("totalSteps")), to_int(js.get("totalKilocalories")),
-            to_int(js.get("activeKilocalories")))
+            to_int(js.get("activeKilocalories")), stress, high_min)
 
 
 def fetch_nutrition(api, d):
@@ -196,9 +201,10 @@ def main():
         e["rhr"] = int(round(rhr)) if rhr is not None else None  # APIはfloatで返す
         e["hrv"] = safe(fetch_hrv, api, ds)
         if d < today:  # 当日は日中途中の部分値になるため出力しない（翌日以降の再配信で確定）
-            e["steps"], e["kcalOut"], e["kcalActive"] = safe(fetch_activity, api, ds) or (None, None, None)
+            e["steps"], e["kcalOut"], e["kcalActive"], e["stress"], e["stressHighMin"] = \
+                safe(fetch_activity, api, ds) or (None, None, None, None, None)
             e["kcalIn"], e["protein"] = safe(fetch_nutrition, api, ds) or (None, None)
-        got = {k: e[k] for k in ("sleep", "rhr", "hrv", "bb", "steps", "kcalOut", "kcalActive", "kcalIn", "protein")}
+        got = {k: e[k] for k in ("sleep", "rhr", "hrv", "bb", "steps", "kcalOut", "kcalActive", "kcalIn", "protein", "stress", "stressHighMin")}
         if any(v is not None for v in got.values()):
             entries_by_date[ds] = e
             log(f"  {ds}: {got}")
@@ -237,9 +243,26 @@ def main():
     # （失敗してもiCloud配信は済んでいるので従来の「ファイルから取込」で運用継続できる）
     try:
         import sync_push
-        log("同期: " + sync_push.update_and_push(entries))
+        total, changed = sync_push.merge_into_mirror(entries)
+        log(f"写し: {total}件（更新{changed}）")
     except Exception as e:
-        log(f"同期失敗（iCloud配信は完了済み。手動: scripts/sync_push.py --push）: {e}")
+        log(f"写し更新失敗（iCloud配信は完了済み）: {e}")
+        return
+    # v1.6.0 アドバイス生成（Claude Code無人実行）。失敗時は前回分を据え置く
+    advice = None
+    try:
+        import advice_gen
+        advice = advice_gen.generate()
+        log(f"アドバイス生成: {advice['date']}")
+    except Exception as e:
+        import advice_gen as _ag
+        advice = _ag.load_latest()
+        log(f"アドバイス生成失敗（前回分{advice['date'] if advice else 'なし'}を据え置き）: {e}")
+    try:
+        n, updated, sha = sync_push.push_mirror(advice)
+        log(f"同期: {n}件{'＋アドバイス' if advice else ''} → {sync_push.REPO}/{sync_push.ENC_FILE} {updated} commit {sha[:7]}")
+    except Exception as e:
+        log(f"同期push失敗（iCloud配信は完了済み。手動: scripts/sync_push.py --push）: {e}")
 
     if not args.since:  # --since は検証・追補用のため状態を進めない
         # omronDates=体組成を配信済みの日付（取りこぼし誤検出の防止用・直近60日分）。

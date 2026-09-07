@@ -31,7 +31,7 @@ QR_PATH = os.path.join(ROOT, "data", "sync_setup_qr.png")
 REPO = "fugangliang/rf-tracker-data"
 ENC_FILE = "data.enc"
 NUMERIC_FIELDS = ["hrv", "rhr", "sleep", "bb", "weight", "mood", "fat", "muscle", "visceral",
-                  "steps", "kcalOut", "kcalActive", "kcalIn", "protein"]
+                  "steps", "kcalOut", "kcalActive", "kcalIn", "protein", "stress", "stressHighMin"]
 
 
 def b64url(b):
@@ -151,20 +151,26 @@ def push_envelope(env):
     return json.loads(out)["commit"]["sha"]
 
 
-def push_mirror():
+def build_payload(entries, advice=None):
+    """平文ペイロード v2: {v:2, entries:[...], advice:{date,text,generatedAt}|null}
+    （アプリ sync.js parsePayload は v1=配列 も受理する）"""
+    return json.dumps({"v": 2, "entries": entries, "advice": advice}, ensure_ascii=False).encode()
+
+
+def push_mirror(advice=None):
     entries = load_mirror()
     if not entries:
         raise RuntimeError("写しが空（--seed で初期化する）")
-    env = encrypt_envelope(json.dumps(entries, ensure_ascii=False).encode(), load_key())
+    env = encrypt_envelope(build_payload(entries, advice), load_key())
     sha = push_envelope(env)
     return len(entries), env["updated"], sha
 
 
-def update_and_push(incoming):
+def update_and_push(incoming, advice=None):
     """garmin_fetch から呼ぶ入口。写しをマージして push。返り値: 説明文字列"""
     total, changed = merge_into_mirror(incoming)
-    n, updated, sha = push_mirror()
-    return f"写し{total}件（更新{changed}）→ {REPO}/{ENC_FILE} {updated} commit {sha[:7]}"
+    n, updated, sha = push_mirror(advice)
+    return f"写し{total}件（更新{changed}）{'＋アドバイス' + advice['date'] if advice else ''}→ {REPO}/{ENC_FILE} {updated} commit {sha[:7]}"
 
 
 def main():
@@ -187,7 +193,12 @@ def main():
             data = json.load(f)
         print("マージ: 総%d件・更新%d件" % merge_into_mirror(data if isinstance(data, list) else [data]))
     if a.push:
-        n, updated, sha = push_mirror()
+        try:
+            import advice_gen
+            adv = advice_gen.load_latest()
+        except Exception:
+            adv = None
+        n, updated, sha = push_mirror(adv)
         print(f"push: {n}件 {updated} commit {sha[:7]}")
     if a.status or not any([a.gen_key, a.seed, a.merge, a.push]):
         m = load_mirror()

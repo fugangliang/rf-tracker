@@ -1,7 +1,7 @@
 /* RF基準線トラッカー UI＋永続化（IndexedDB）。ロジックは logic.js(RFLogic) に集約。v1.4.0: 減量タブ追加、v1.5.0: 自動同期(sync.js) */
 'use strict';
 const L = RFLogic;
-const APP_VERSION = '1.5.1'; // sw.js の VERSION と揃える（保全タブに表示・更新確認用）
+const APP_VERSION = '1.6.0'; // sw.js の VERSION と揃える（保全タブに表示・更新確認用）
 
 /* ================= IndexedDB ================= */
 const DB_NAME = 'rf-tracker', DB_VER = 1;
@@ -94,6 +94,8 @@ const METRIC_DEFS = [
   { key: 'bb', name: 'Body Battery', unit: '', digits: 0 },
   { key: 'weight', name: '体重', unit: 'kg', digits: 1, showChange: true, sparse: true },
   { key: 'fat', name: '体脂肪率', unit: '%', digits: 1, showChange: true, sparse: true },
+  { key: 'stress', name: 'ストレス平均', unit: '', digits: 0, reversed: true, sparse: true },
+  { key: 'steps', name: '歩数', unit: '歩', digits: 0, sparse: true },
 ];
 
 async function renderDashboard() {
@@ -111,6 +113,17 @@ async function renderDashboard() {
   const cond = L.condition(entries, latest);
   const cmt = L.comments(entries, latest, opts);
   const headerText = L.statusHeaderText(entries, latest, opts);
+  const advice = await getMeta('advice');
+  // v1.6.0: 負荷（Garminストレス）チップ。ストレスは低いほど良い＝反転判定（+5%黄 / +10%赤）。
+  // 当日分は翌日確定で常にnullのため、直近3日以内の最新計測日の値をその日の基準線と比べる
+  let stEntry = null;
+  for (let i = entries.length - 1; i >= 0 && L.dateToNum(latest.date) - L.dateToNum(entries[i].date) <= 3; i--) {
+    if (typeof entries[i].stress === 'number') { stEntry = entries[i]; break; }
+  }
+  const stB = stEntry ? L.baseline(entries, stEntry.date, 'stress') : { mean: null, n: 0 };
+  const stDev = stEntry ? L.deviationPct(stEntry.stress, stB.mean) : null;
+  const stSig = L.signal(stDev, true);
+  const stLabel = stEntry && stEntry.date !== latest.date ? `負荷(${stEntry.date.slice(5).replace('-', '/')})` : '負荷';
 
   // 総合状態（v1.1）: 不調/平常/好調
   let condHtml = `<div class="cond-state cond-${cond.state}">${L.CONDITION_LABELS[cond.state]}</div>`;
@@ -131,7 +144,7 @@ async function renderDashboard() {
     const s = cond.signals[m];
     if (!s) return `<span class="chip chip-none">${sigNames[m]} —</span>`;
     return `<span class="chip chip-${s}">${sigNames[m]} ${L.SIGNAL_LABELS[s]}<small> ${fmtDev(sigDevs[m])}</small></span>`;
-  }).join('');
+  }).join('') + (stSig ? `<span class="chip chip-${stSig}">${stLabel} ${L.SIGNAL_LABELS[stSig]}<small> ${fmtDev(stDev)}</small></span>` : `<span class="chip chip-none">負荷 —</span>`);
 
   let moodHtml;
   if (mood.building) {
@@ -147,9 +160,6 @@ async function renderDashboard() {
     ${condHtml}
     <div class="chip-row">${sigLine}</div>
     ${levelHtml}
-    <div class="status-line"><span class="label">予測故障モード:</span> ${esc(fm.mode)}</div>
-    <div class="status-line"><span class="label">プロトコル:</span> ${esc(fm.protocol)}</div>
-    <div class="status-line"><span class="label">警告灯感度:</span> ${fm.sensitivity === '高' ? '<b class="level-low">高</b>' : '標準'}</div>
     <div class="status-line">${moodHtml}</div>
     ${mood.flag ? `<div class="flag">主観-客観乖離: ${esc(mood.flag)}</div>` : ''}
     ${latest.edema ? `<div class="notice">浮腫フラグ: 体組成値は割り引いて解釈</div>` : ''}
@@ -157,11 +167,13 @@ async function renderDashboard() {
     <button class="btn secondary" id="copy-status">状態ヘッダーを全文コピー</button>
   </div>
   <div class="card">
-    <h2>状態評価コメント</h2>
+    <h2>今日のアドバイス${advice && advice.date ? `（${advice.date}${advice.generatedAt ? ' ' + new Date(advice.generatedAt).toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' }) + '生成' : ''}）` : ''}</h2>
+    ${advice && advice.text
+      ? `<div class="advice">${esc(advice.text).replace(/\n/g, '<br>')}</div>${advice.date && advice.date !== latest.date ? `<p class="muted" style="margin-top:6px">※ ${latest.date} のデータより前に生成されたアドバイス。次回同期で更新</p>` : ''}`
+      : `<p class="muted">アドバイス未受信（Mac側の毎朝生成→自動同期で届く）。以下は暫定のルール要約。</p>
     <div class="comment-line"><span class="label">体調:</span> ${esc(cmt.condition)}</div>
     <div class="comment-line"><span class="label">体重:</span> ${esc(cmt.weight)}</div>
-    <div class="comment-line"><span class="label">体脂肪率:</span> ${esc(cmt.fat)}</div>
-    ${opts.goalWeight === null ? '<p class="muted" style="margin-top:6px">目標体重は「保全」タブで設定すると体重コメントに反映される</p>' : ''}
+    <div class="comment-line"><span class="label">体脂肪率:</span> ${esc(cmt.fat)}</div>`}
   </div>`;
 
   html += `<div class="metric-grid">`;
@@ -278,6 +290,8 @@ async function renderRecord(dateArg) {
       <label class="field">活動kcal<input type="number" step="any" id="f-kcalactive" value="${v('kcalActive')}"></label>
       <label class="field">摂取kcal<input type="number" step="any" id="f-kcalin" value="${v('kcalIn')}"></label>
       <label class="field">タンパク質 (g)<input type="number" step="any" id="f-protein" value="${v('protein')}"></label>
+      <label class="field">ストレス平均 (0-100)<input type="number" step="any" id="f-stress" value="${v('stress')}"></label>
+      <label class="field">高ストレス (分)<input type="number" step="any" id="f-stresshigh" value="${v('stressHighMin')}"></label>
     </div>
     <label class="field">寝起きの気分（1〜5）</label>
     <div class="mood-btns" id="f-mood">
@@ -319,6 +333,7 @@ async function renderRecord(dateArg) {
       visceral: num('#f-visceral'),
       steps: num('#f-steps'), kcalOut: num('#f-kcalout'), kcalActive: num('#f-kcalactive'),
       kcalIn: num('#f-kcalin'), protein: num('#f-protein'),
+      stress: num('#f-stress'), stressHighMin: num('#f-stresshigh'),
       confounds: [...document.querySelectorAll('.check-row input[data-c]')].filter(c => c.checked).map(c => c.dataset.c),
       excludeBaseline: $('#f-exclude').checked,
       edema: $('#f-edema').checked,
@@ -347,6 +362,7 @@ const TREND_METRICS = [
   { key: 'weight', name: '体重' }, { key: 'mood', name: '気分' },
   { key: 'fat', name: '体脂肪率' }, { key: 'muscle', name: '骨格筋率' },
   { key: 'steps', name: '歩数' }, { key: 'kcalIn', name: '摂取kcal' }, { key: 'kcalOut', name: '消費kcal' },
+  { key: 'stress', name: 'ストレス平均' }, { key: 'stressHighMin', name: '高ストレス(分)' },
 ];
 let trendState = { metric: 'hrv', weeks: 4 };
 
@@ -753,14 +769,20 @@ async function runSync(opts) {
         try { text = await RFSync.decryptEnvelope(fr.envelope, cfg.key); }
         catch (e) { result = { ok: false, state: 'key', message: '復号失敗（設定文字列の鍵が一致しない）' }; }
         if (text !== undefined) {
+          let payload;
+          try { payload = RFSync.parsePayload(text); }
+          catch (e) { payload = null; result = { ok: false, state: 'payload', message: '配信データの形式が不正' }; }
+          if (payload) {
+          if (payload.advice) await setMeta('advice', payload.advice);
           const existing = await getAllEntries();
-          const res = L.parseImport(text, existing, { merge: true });
+          const res = L.parseImport(payload.entriesText, existing, { merge: true });
           if (res.entries.length) await putEntries(res.entries);
           const existingDates = new Set(existing.map(e => e.date));
           const added = res.entries.filter(e => !existingDates.has(e.date)).length;
           await setMeta('syncLastUpdated', fr.envelope.updated || null);
           result = { ok: true, state: 'updated', added, updated: res.entries.length - added,
-            message: `同期取込 ${res.entries.length}件（新規${added}・更新${res.entries.length - added}）${res.errors.length ? ` / エラー${res.errors.length}` : ''}${res.edemaDetected.length ? ` / 浮腫検出 ${res.edemaDetected.join(', ')}` : ''}` };
+            message: `同期取込 ${res.entries.length}件（新規${added}・更新${res.entries.length - added}）${res.errors.length ? ` / エラー${res.errors.length}` : ''}${res.edemaDetected.length ? ` / 浮腫検出 ${res.edemaDetected.join(', ')}` : ''}${payload.advice ? ' / アドバイス更新' : ''}` };
+          }
         }
       }
     }

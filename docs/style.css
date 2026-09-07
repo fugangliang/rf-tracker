@@ -56,6 +56,8 @@ main { padding: 12px; max-width: 720px; margin: 0 auto; }
 .chip-none { background: var(--panel2); color: var(--muted); border: 1px solid #334155; }
 .badge.sync { background: #0f766e55; color: var(--accent); border: 1px solid #0f766e; cursor: pointer; }
 .badge.sync.err { background: #7f1d1d55; color: var(--low); border-color: #991b1b; }
+.advice { font-size: 14px; line-height: 1.7; white-space: normal; }
+.advice b { color: var(--accent); }
 .comment-line { font-size: 13px; line-height: 1.6; margin-top: 6px; }
 .comment-line .label { color: var(--accent); font-weight: 600; }
 .status-level { font-size: 22px; font-weight: 700; }

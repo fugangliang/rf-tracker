@@ -376,6 +376,24 @@ const S = require('../docs/sync.js');
   await S.fetchEnvelope('o/r', 'tok', async (url, init) => { hdr = { url, ...init.headers }; return { status: 404, ok: false, text: async () => '' }; });
   check('fetchEnvelope: Contents API URL・raw Accept・Bearer', hdr.url === 'https://api.github.com/repos/o/r/contents/data.enc' && hdr.Accept === 'application/vnd.github.raw+json' && hdr.Authorization === 'Bearer tok');
 
+  // 5.10 v1.6.0 ペイロードv2（アドバイス同梱）＋ストレス項目
+  console.log('5.10 ペイロードv2・ストレス（v1.6.0）');
+  const p1 = S.parsePayload(JSON.stringify([{ date: '2026-09-01', hrv: 33 }]));
+  check('parsePayload v1: 配列はそのままエントリ・アドバイスなし', JSON.parse(p1.entriesText)[0].hrv === 33 && p1.advice === null);
+  const adv = { date: '2026-09-07', text: '総括: テスト\n今日の一手: 22時就寝', generatedAt: '2026-09-07T00:35:00+00:00' };
+  const p2 = S.parsePayload(JSON.stringify({ v: 2, entries: [{ date: '2026-09-01', stress: 40, stressHighMin: 90 }], advice: adv }));
+  check('parsePayload v2: entries と advice を分離', JSON.parse(p2.entriesText)[0].stress === 40 && p2.advice.text === adv.text && p2.advice.date === '2026-09-07');
+  check('parsePayload v2: advice が空/欠落なら null', S.parsePayload(JSON.stringify({ v: 2, entries: [], advice: null })).advice === null && S.parsePayload(JSON.stringify({ v: 2, entries: [], advice: { text: '  ' } })).advice === null);
+  let badPayload = false; try { S.parsePayload(JSON.stringify({ foo: 1 })); } catch (e) { badPayload = true; }
+  check('parsePayload: 不正形式は例外', badPayload);
+  const rs = L.parseImport(p2.entriesText, [], { merge: true }).entries[0];
+  check('stress/stressHighMin をスキーマとして取込・export往復', rs.stress === 40 && rs.stressHighMin === 90 && JSON.parse(L.exportJSON([rs]))[0].stressHighMin === 90);
+  check('旧JSONは stress が null で受理', L.parseImport(JSON.stringify([{ date: '2026-09-01' }]), []).entries[0].stress === null);
+  check('monthlySummary にストレス行と列', L.monthlySummary([{ ...rs, confounds: [], excludeBaseline: false, edema: false, note: '' }], '2026-09').includes('ストレス平均') && L.monthlySummary([rs], '2026-09').includes('\tstress\tstressHighMin\t'));
+  const stEntries = []; for (let n = 0; n < 28; n++) stEntries.push({ date: new Date(Date.UTC(2026, 7, 1) + n * 86400000).toISOString().slice(0, 10), stress: 40, confounds: [], excludeBaseline: false, edema: false, note: '' });
+  const stB = L.baseline(stEntries, '2026-08-29', 'stress');
+  check('ストレス基準線: 28日平均40・反転信号（+12.5%→赤）', stB.mean === 40 && stB.n === 28 && L.signal(L.deviationPct(45, stB.mean), true) === 'red' && L.signal(L.deviationPct(41, stB.mean), true) === 'blue');
+
   if (HAS_DATA) {
     const entries2 = all();
     console.log('6. 状態ヘッダー全文（2026-07-08・目視確認用）');

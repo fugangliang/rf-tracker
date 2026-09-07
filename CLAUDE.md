@@ -1,6 +1,18 @@
 # CLAUDE.md — RF基準線トラッカーPWA
 
-## ステータス（2026-09-07時点）
+## ステータス（2026-09-08時点）
+
+**v1.6.0: 毎朝のアドバイス生成（Claude Code無人実行）＋負荷指標（Garminストレス）を追加**（RF指示
+「状態ヘッダーの分析が意味をなさない。睡眠・食事・活動・仕事負荷を分析した最適なアドバイスをコメントせよ」）。
+- 流れ: 9:30 `garmin_fetch.py` → 写しマージ → `advice_gen.py`（`advice_context.js` で文脈生成 →
+  `claude -p --max-turns 1`、cwd=data/advice/、基準線ドキュメントをローカル読込）→ `sync_push.push_mirror(advice)`
+  でペイロードv2 `{v:2, entries, advice}` を暗号化push → アプリが復号時に advice を meta 保存し状態タブに表示
+- 負荷=Garmin `averageStressLevel`（`stress`・低いほど良い＝反転信号）と `highStressDuration`（`stressHighMin`）。
+  当日分は活動量と同様null。RF選択: 手入力の負荷スコア・カレンダー連携は不採用
+- 状態ヘッダーから固定文言（故障モード予報・プロトコル・警告灯感度）を除去。コピー用全文テキストには残る
+- 生成失敗時は前回分を据え置き（`data/advice_latest.json`）。`claude` は `--bare` だと鍵束を読まず未ログイン扱いに
+  なるため使わない。launchd環境で動かない場合は `data/auto_fetch.log` の「アドバイス生成失敗」を確認
+- テスト5.10（8項目）追加・計117項目
 
 **v1.4.0: 減量モニタリング機能を追加**（RF承認済み計画に基づく）。
 - 新タブ「減量」: 判定軸は減量ペース（28日窓OLS勾配・月2kg超で急減）と体組成の質（脂肪量↓・除脂肪量維持）。
@@ -139,7 +151,7 @@ evict→再DLラウンドトリップで実アップロード・内容一致を�
 
 ## 変更・デプロイ手順
 
-1. `docs/` を編集 → `node test/acceptance.js`（109項目、data/があれば受け入れ含む）
+1. `docs/` を編集 → `node test/acceptance.js`（117項目、data/があれば受け入れ含む）
 2. **`docs/sw.js` の `VERSION` を上げる**（忘れるとクライアントのキャッシュが更新されない）
 3. commit → push → Pagesに自動反映（約15秒）
 - ghトークンに workflow スコープなし。`.github/workflows/` はpush不可（ブランチ配信を採用した理由）

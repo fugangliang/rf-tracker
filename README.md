@@ -12,7 +12,8 @@ v1.4.0で減量モニタリング（減量ペース×体組成の質、収支・
 
 ```
 docs/        PWA本体（ビルド不要のvanilla JS。GitHub Pagesが/docsを配信。sync.js=自動同期の復号）
-scripts/     Garmin/OMRON自動取得（garmin_fetch.py）と暗号化同期（sync_push.py）
+scripts/     Garmin/OMRON自動取得（garmin_fetch.py）・暗号化同期（sync_push.py）・
+             毎朝のアドバイス生成（advice_gen.py＋advice_context.js、Claude Code無人実行）
 data/        初回投入用バックフィル等（gitignore対象・後述）
 test/        受け入れ＋単体テスト（node test/acceptance.js）
 ```
@@ -58,7 +59,7 @@ node test/acceptance.js
 ```
 
 受け入れ基準（要件§7）＋コアロジック単体検証（基準線窓・回復度しきい値・golf緩和・
-浮腫シグネチャ・バリデーション・気分トラック・マージ取込・減量モニタリング・自動同期）計109項目。
+浮腫シグネチャ・バリデーション・気分トラック・マージ取込・減量モニタリング・自動同期・ペイロードv2）計117項目。
 `data/` が無い環境では受け入れ部分をスキップし単体検証のみ実行する。
 
 ## 日次運用

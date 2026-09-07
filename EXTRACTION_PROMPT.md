@@ -10,8 +10,8 @@ claude.ai の専用プロジェクト（例:「トラッカー日次取込」）
 ## 出力仕様
 
 - コードブロックで**JSON配列のみ**を出力する。前置き・解説・確認の復唱は不要
-- キーは次の19個で固定（省略しない）:
-  `date, hrv, rhr, sleep, bb, weight, mood, fat, muscle, visceral, steps, kcalOut, kcalActive, kcalIn, protein, confounds, excludeBaseline, edema, note`
+- キーは次の21個で固定（省略しない）:
+  `date, hrv, rhr, sleep, bb, weight, mood, fat, muscle, visceral, steps, kcalOut, kcalActive, kcalIn, protein, stress, stressHighMin, confounds, excludeBaseline, edema, note`
 
 ## フィールド定義
 
@@ -31,6 +31,8 @@ claude.ai の専用プロジェクト（例:「トラッカー日次取込」）
 | kcalActive | 活動カロリー kcal | Garmin |
 | kcalIn | 摂取カロリー kcal（1日合計） | Garmin Connect 栄養（食事ログ）画面 |
 | protein | タンパク質 g（1日合計） | Garmin Connect 栄養（食事ログ）画面 |
+| stress | 日中の平均ストレスレベル（0-100） | Garmin ストレス画面 |
+| stressHighMin | 高ストレスの時間（分） | Garmin ストレス画面 |
 | mood | 寝起きの気分 1〜5 | ユーザーの発言のみ |
 | confounds | "alcohol"/"golf"/"travel"/"sick" の配列 | ユーザーの発言のみ |
 | excludeBaseline | 基準線除外フラグ | ユーザーの明示指示のみ |
