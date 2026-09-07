@@ -1,6 +1,7 @@
 /* RF基準線トラッカー UI＋永続化（IndexedDB）。ロジックは logic.js(RFLogic) に集約。v1.4.0: 減量タブ追加、v1.5.0: 自動同期(sync.js) */
 'use strict';
 const L = RFLogic;
+const APP_VERSION = '1.5.1'; // sw.js の VERSION と揃える（保全タブに表示・更新確認用）
 
 /* ================= IndexedDB ================= */
 const DB_NAME = 'rf-tracker', DB_VER = 1;
@@ -451,7 +452,7 @@ async function renderBackup() {
   const syncLast = await getMeta('syncLast');
   view().innerHTML = `<div class="card">
     <h2>バックアップ</h2>
-    <p class="muted">総エントリ数: ${entries.length}</p>
+    <p class="muted">アプリ版: v${APP_VERSION} / 総エントリ数: ${entries.length}</p>
     <p class="muted">最終エクスポート: ${last ? new Date(last).toLocaleString('ja-JP') : 'なし'}
       ${overdue ? '<span class="badge">7日超過</span>' : ''}</p>
     <button class="btn" id="export-btn">全データをJSONでエクスポート</button>
@@ -809,6 +810,14 @@ function setupAutoSync() {
   await switchTab('dashboard');
   setupAutoSync();
   if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register('sw.js').catch(() => { /* ローカルfile://等では無視 */ });
+    // 新版のSWが制御を取ったら自動で再読み込み（従来は2回開き直す必要があった）
+    let reloaded = false;
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      if (reloaded || !navigator.serviceWorker.controller) return;
+      reloaded = true; location.reload();
+    });
+    navigator.serviceWorker.register('sw.js')
+      .then(reg => reg.update().catch(() => {}))
+      .catch(() => { /* ローカルfile://等では無視 */ });
   }
 })();
