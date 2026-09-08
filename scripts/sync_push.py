@@ -132,8 +132,11 @@ def encrypt_envelope(payload: bytes, key: bytes):
             "updated": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")}
 
 
+GH_BIN = "/opt/homebrew/bin/gh"  # launchd環境はPATHに/opt/homebrew/binが無いため絶対パス（2026-09-08失敗で判明）
+
+
 def gh_api(args, input_json=None):
-    cmd = ["gh", "api"] + args
+    cmd = [GH_BIN, "api"] + args
     r = subprocess.run(cmd, input=input_json, capture_output=True, text=True, timeout=60)
     return r.returncode, r.stdout, r.stderr
 
