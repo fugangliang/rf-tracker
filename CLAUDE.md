@@ -2,6 +2,16 @@
 
 ## ステータス（2026-09-08時点）
 
+### 次セッションの確認事項（2026-09-08 /close 時点の繰越）
+1. **RFの同期設定が完了したか未確認**（PAT発行済みとの申告あり。iPhone保全タブで設定文字列＋トークン保存→
+   「同期取込 ○件」が出たか）。完了していれば iCloud Drive `rf-tracker/sync_setup.txt`（鍵を含む）を削除する `[要確認]`
+2. 9/9 9:30 の自動実行ログ（`data/auto_fetch.log`）で「アドバイス生成」「同期: …commit」の両方が出たか
+   （gh絶対パス修正後の初の無人実行）
+3. `data/auto_fetch_state.json` の omronGaps（8/26〜28は9/8に `--since` で追補済みだが、状態未記録のため
+   翌日に再検出され得る＝リマインド1回余計なだけ）
+4. アドバイスの濃さ・形式へのRF所感（プロンプトは `scripts/advice_gen.py` の INSTRUCTIONS 1箇所）
+5. `EXTRACTION_PROMPT.md` 改訂版のclaude.aiプロジェクト貼り直し（緊急度低）
+
 **v1.6.0: 毎朝のアドバイス生成（Claude Code無人実行）＋負荷指標（Garminストレス）を追加**（RF指示
 「状態ヘッダーの分析が意味をなさない。睡眠・食事・活動・仕事負荷を分析した最適なアドバイスをコメントせよ」）。
 - 流れ: 9:30 `garmin_fetch.py` → 写しマージ → `advice_gen.py`（`advice_context.js` で文脈生成 →
