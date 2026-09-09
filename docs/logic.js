@@ -466,7 +466,7 @@
   /* ===== v1.4.0 減量モニタリング（表示レイヤー追加・コアロジック§4は不変更） =====
    * 判定軸は「減量ペース」と「体組成の質」。補助として収支（Garmin推定）・タンパク質・活動量。
    * すべての軸に insufficient（判定保留）を持たせ、データ不足時に推測しない。 */
-  const WL_DEFAULTS = { deficitTarget: 500, proteinTarget: 150 };
+  const WL_DEFAULTS = { deficitTarget: 500, proteinTarget: 150, bmr: null };  // bmr: 基礎代謝（体組成計の値）。null=Garmin推定消費を使う
   const WL_THRESHOLDS = {
     paceFast: -0.5,      // kg/週。≈月2kg超（基準線ドキュメント「月2kg超の急減禁止」）
     paceGood: -0.15,     // kg/週。これより緩いと停滞
@@ -537,12 +537,21 @@
     return r;
   }
 
-  /* 減量モニタリング判定。opts: { goalWeight, deficitTarget, proteinTarget }（未設定はWL_DEFAULTS） */
+  /* 消費kcalの算定（v1.6.2）。bmr（基礎代謝・体組成計の値）が設定されていれば 基礎代謝＋Garmin活動kcal、
+   * 未設定なら Garmin推定の総消費（kcalOut）。Garminの基礎代謝は体組成計より約300kcal高く出るため
+   * （2026-09-09 RF指摘: Garmin 2,226 vs オムロン 1,900）、設定時はGarminの総消費を使わない */
+  function energyOut(e, bmr) {
+    if (typeof bmr === 'number') return typeof e.kcalActive === 'number' ? bmr + e.kcalActive : null;
+    return typeof e.kcalOut === 'number' ? e.kcalOut : null;
+  }
+
+  /* 減量モニタリング判定。opts: { goalWeight, deficitTarget, proteinTarget, bmr }（未設定はWL_DEFAULTS） */
   function weightLossStatus(entries, dateStr, opts) {
     const T = WL_THRESHOLDS;
     const goalWeight = opts && typeof opts.goalWeight === 'number' ? opts.goalWeight : null;
     const deficitTarget = opts && typeof opts.deficitTarget === 'number' ? opts.deficitTarget : WL_DEFAULTS.deficitTarget;
     const proteinTarget = opts && typeof opts.proteinTarget === 'number' ? opts.proteinTarget : WL_DEFAULTS.proteinTarget;
+    const bmr = opts && typeof opts.bmr === 'number' && opts.bmr > 0 ? opts.bmr : null;
     const today = dateToNum(dateStr);
 
     // 最新実測体重（当日以前）
@@ -606,24 +615,30 @@
       }
     }
 
-    // --- 収支（Garmin推定消費 − 摂取。直近7日で両方ある日） ---
-    const energy = { state: 'insufficient', kcalIn: null, kcalOut: null, deficit: null, n: 0, expectedKgWeek: null, target: deficitTarget, protein: { state: 'insufficient', mean: null, n: 0, target: proteinTarget }, reason: '' };
+    // --- 収支（消費 − 摂取。直近7日で両方ある日。消費の算定は energyOut 参照） ---
+    const basisLabel = bmr !== null ? `基礎代謝${bmr}＋Garmin活動kcal` : 'Garmin推定';
+    const energy = { state: 'insufficient', kcalIn: null, kcalOut: null, deficit: null, n: 0, expectedKgWeek: null, target: deficitTarget,
+      basis: bmr !== null ? 'bmr' : 'garmin', bmr, basisLabel, outN: 0, intakeTarget: null,
+      protein: { state: 'insufficient', mean: null, n: 0, target: proteinTarget }, reason: '' };
     {
-      const both = windowValues(entries, dateStr, 7, e => (typeof e.kcalIn === 'number' && typeof e.kcalOut === 'number') ? e.kcalOut - e.kcalIn : null);
+      const both = windowValues(entries, dateStr, 7, e => { const o = energyOut(e, bmr); return (typeof e.kcalIn === 'number' && o !== null) ? o - e.kcalIn : null; });
       energy.n = both.length;
       const ins = windowValues(entries, dateStr, 7, 'kcalIn').map(p => p.v);
-      const outs = windowValues(entries, dateStr, 7, 'kcalOut').map(p => p.v);
-      energy.kcalIn = meanOf(ins); energy.kcalOut = meanOf(outs);
+      const outs = windowValues(entries, dateStr, 7, e => energyOut(e, bmr)).map(p => p.v);
+      energy.kcalIn = meanOf(ins); energy.kcalOut = meanOf(outs); energy.outN = outs.length;
+      // 目安摂取 = 直近7日の平均消費 − 目標赤字（消費がn≥3あれば摂取記録がなくても出す）
+      if (outs.length >= T.energyMinN) energy.intakeTarget = energy.kcalOut - deficitTarget;
       if (both.length >= T.energyMinN) {
         energy.deficit = meanOf(both.map(p => p.v));
         energy.expectedKgWeek = -energy.deficit * 7 / 7700;
         if (energy.deficit < T.deficitLow * deficitTarget) energy.state = 'below';
         else if (energy.deficit > T.deficitHigh * deficitTarget) energy.state = 'above';
         else energy.state = 'on';
-        energy.reason = `7日平均 赤字 ${Math.round(energy.deficit)}kcal/日（目標${deficitTarget}・n=${both.length}・消費はGarmin推定）。理論ペース ${sgn(energy.expectedKgWeek)}kg/週。`;
+        energy.reason = `7日平均 赤字 ${Math.round(energy.deficit)}kcal/日（目標${deficitTarget}・n=${both.length}・消費は${basisLabel}）。理論ペース ${sgn(energy.expectedKgWeek)}kg/週。`;
       } else {
         energy.reason = `摂取と消費が揃う日が直近7日で${both.length}件。3件以上が必要。`;
       }
+      if (energy.intakeTarget !== null) energy.reason += ` 目安摂取 ${Math.round(energy.intakeTarget)}kcal/日（平均消費${Math.round(energy.kcalOut)}−目標赤字${deficitTarget}）。`;
       const pr = windowValues(entries, dateStr, 7, 'protein').map(p => p.v);
       energy.protein.n = pr.length; energy.protein.mean = meanOf(pr);
       if (pr.length >= T.energyMinN) {
@@ -698,7 +713,7 @@
   return {
     NUMERIC_FIELDS, CONFOUNDS, BASELINE_DAYS, MIN_N, FAILURE_MODES,
     WL_DEFAULTS, WL_THRESHOLDS, WL_LABELS,
-    windowValues, slopePerWeek, weightLossStatus, weightLossText, movingAverageSeries,
+    windowValues, slopePerWeek, energyOut, weightLossStatus, weightLossText, movingAverageSeries,
     CONDITION_LABELS, SIGNAL_LABELS,
     dateToNum, isValidDateStr, isExcludedFromBaseline,
     baseline, deviationPct, recovery, moodTrack, detectEdema,

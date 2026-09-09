@@ -1,7 +1,7 @@
 /* RF基準線トラッカー UI＋永続化（IndexedDB）。ロジックは logic.js(RFLogic) に集約。v1.4.0: 減量タブ追加、v1.5.0: 自動同期(sync.js) */
 'use strict';
 const L = RFLogic;
-const APP_VERSION = '1.6.1'; // sw.js の VERSION と揃える（保全タブに表示・更新確認用）
+const APP_VERSION = '1.6.2'; // sw.js の VERSION と揃える（保全タブに表示・更新確認用）
 
 /* ================= IndexedDB ================= */
 const DB_NAME = 'rf-tracker', DB_VER = 1;
@@ -503,8 +503,9 @@ async function renderBackup() {
       <label class="field">赤字目標 (kcal/日・既定${L.WL_DEFAULTS.deficitTarget})<input type="number" step="10" id="goal-deficit" value="${typeof (await getMeta('deficitTarget')) === 'number' ? await getMeta('deficitTarget') : ''}"></label>
       <label class="field">タンパク質目標 (g/日・既定${L.WL_DEFAULTS.proteinTarget})<input type="number" step="5" id="goal-protein" value="${typeof (await getMeta('proteinTarget')) === 'number' ? await getMeta('proteinTarget') : ''}"></label>
     </div>
+    <label class="field">基礎代謝 (kcal/日・体組成計の値。空欄=Garmin推定消費)<input type="number" step="10" id="goal-bmr" value="${typeof (await getMeta('bmr')) === 'number' ? await getMeta('bmr') : ''}"></label>
     <button class="btn secondary" id="goal-save">設定を保存</button>
-    <p class="muted" style="margin-top:6px">この端末のみに保存され、状態評価コメントの体重評価と減量タブの判定に使われる。空欄は既定値。</p>
+    <p class="muted" style="margin-top:6px">この端末のみに保存され、状態評価コメントの体重評価と減量タブの判定に使われる。空欄は既定値。基礎代謝を入れると収支の消費は「基礎代謝＋Garmin活動kcal」で計算する（Garminの基礎代謝は体組成計より高く出るため）。</p>
     <div class="result" id="goal-result"></div>
   </div>`;
   $('#sync-save').addEventListener('click', async () => {
@@ -547,10 +548,10 @@ async function renderBackup() {
       return;
     }
     const parseOpt = id => { const t = $(id).value.trim(); return t === '' ? null : +t; };
-    const dv = parseOpt('#goal-deficit'), pv = parseOpt('#goal-protein');
-    for (const x of [dv, pv]) {
+    const dv = parseOpt('#goal-deficit'), pv = parseOpt('#goal-protein'), bv = parseOpt('#goal-bmr');
+    for (const x of [dv, pv, bv]) {
       if (x !== null && (!isFinite(x) || x <= 0)) {
-        $('#goal-result').textContent = '赤字目標・タンパク質目標は正の数値（空欄で既定値）';
+        $('#goal-result').textContent = '赤字目標・タンパク質目標・基礎代謝は正の数値（空欄で既定値）';
         $('#goal-result').className = 'result err';
         return;
       }
@@ -558,8 +559,9 @@ async function renderBackup() {
     await setMeta('goalWeight', v);
     await setMeta('deficitTarget', dv);
     await setMeta('proteinTarget', pv);
+    await setMeta('bmr', bv);
     $('#goal-result').textContent = (v === null ? '目標体重を解除' : `目標体重 ${v}kg`) +
-      ` / 赤字目標 ${dv === null ? `既定${L.WL_DEFAULTS.deficitTarget}` : dv}kcal / タンパク質 ${pv === null ? `既定${L.WL_DEFAULTS.proteinTarget}` : pv}g を保存しました`;
+      ` / 赤字目標 ${dv === null ? `既定${L.WL_DEFAULTS.deficitTarget}` : dv}kcal / タンパク質 ${pv === null ? `既定${L.WL_DEFAULTS.proteinTarget}` : pv}g / 基礎代謝 ${bv === null ? 'Garmin推定' : bv + 'kcal'} を保存しました`;
     $('#goal-result').className = 'result ok';
   });
   $('#export-btn').addEventListener('click', async () => {
@@ -595,11 +597,12 @@ const WL_CHIP = {
   insufficient: 'none'
 };
 async function wlOpts() {
-  const g = await getMeta('goalWeight'), d = await getMeta('deficitTarget'), p = await getMeta('proteinTarget');
+  const g = await getMeta('goalWeight'), d = await getMeta('deficitTarget'), p = await getMeta('proteinTarget'), b = await getMeta('bmr');
   return {
     goalWeight: typeof g === 'number' ? g : null,
     deficitTarget: typeof d === 'number' ? d : L.WL_DEFAULTS.deficitTarget,
-    proteinTarget: typeof p === 'number' ? p : L.WL_DEFAULTS.proteinTarget
+    proteinTarget: typeof p === 'number' ? p : L.WL_DEFAULTS.proteinTarget,
+    bmr: typeof b === 'number' ? b : L.WL_DEFAULTS.bmr
   };
 }
 async function renderLoss() {
@@ -636,7 +639,7 @@ async function renderLoss() {
     { name: '減量ペース（28日窓）', value: w.pace.slopeKgWeek !== null ? `${w.pace.slopeKgWeek >= 0 ? '+' : ''}${w.pace.slopeKgWeek.toFixed(2)}<small> kg/週</small>` : '—', ref: `有効体重 n=${w.pace.n}・期間${w.pace.spanDays}日${w.pace.monthly ? `<br>28日平均 前28日比 ${w.pace.monthly.diff >= 0 ? '+' : ''}${w.pace.monthly.diff.toFixed(1)}kg` : ''}` },
     { name: '脂肪量（28日平均）', value: `${fmtKg(fm.recent)}<small> kg</small>`, ref: `前28日 ${fmtKg(fm.prior)}kg ${fmtDiff(fm.diff)}（n=${fm.nRecent}/${fm.nPrior}）` },
     { name: '除脂肪量（28日平均）', value: `${fmtKg(lm.recent)}<small> kg</small>`, ref: `前28日 ${fmtKg(lm.prior)}kg ${lm.diff !== null ? `<span class="${lm.diff < -0.3 ? 'dev-neg' : ''}">${lm.diff >= 0 ? '+' : ''}${lm.diff.toFixed(2)}kg</span>` : ''}（n=${lm.nRecent}/${lm.nPrior}）` },
-    { name: '収支（7日平均・Garmin推定）', value: w.energy.deficit !== null ? `${Math.round(w.energy.deficit)}<small> kcal赤字/日</small>` : '—', ref: `摂取 ${w.energy.kcalIn !== null ? Math.round(w.energy.kcalIn) : '—'} / 消費 ${w.energy.kcalOut !== null ? Math.round(w.energy.kcalOut) : '—'}（目標赤字${w.energy.target}・n=${w.energy.n}）${w.energy.expectedKgWeek !== null ? `<br>理論ペース ${w.energy.expectedKgWeek >= 0 ? '+' : ''}${w.energy.expectedKgWeek.toFixed(2)}kg/週` : ''}` },
+    { name: `収支（7日平均・${w.energy.basis === 'bmr' ? '基礎代謝＋活動' : 'Garmin推定'}）`, value: w.energy.deficit !== null ? `${Math.round(w.energy.deficit)}<small> kcal赤字/日</small>` : '—', ref: `摂取 ${w.energy.kcalIn !== null ? Math.round(w.energy.kcalIn) : '—'} / 消費 ${w.energy.kcalOut !== null ? Math.round(w.energy.kcalOut) : '—'}（目標赤字${w.energy.target}・n=${w.energy.n}）${w.energy.intakeTarget !== null ? `<br><b>目安摂取 ${Math.round(w.energy.intakeTarget)}kcal/日</b>` : ''}${w.energy.expectedKgWeek !== null ? `<br>理論ペース ${w.energy.expectedKgWeek >= 0 ? '+' : ''}${w.energy.expectedKgWeek.toFixed(2)}kg/週` : ''}` },
     { name: 'タンパク質（7日平均）', value: w.energy.protein.mean !== null ? `${Math.round(w.energy.protein.mean)}<small> g</small>` : '—', ref: `目標${w.energy.protein.target}g（n=${w.energy.protein.n}）` },
     { name: '歩数（7日平均）', value: w.activity.steps7 !== null ? `${Math.round(w.activity.steps7).toLocaleString()}<small> 歩</small>` : '—', ref: `基準線 ${w.activity.stepsBase.mean !== null ? Math.round(w.activity.stepsBase.mean).toLocaleString() : '—'}歩（n=${w.activity.stepsBase.n}/${L.BASELINE_DAYS}）${w.activity.stepsDev !== null ? ` <span class="${w.activity.stepsDev >= 0 ? 'dev-pos' : 'dev-neg'}">${fmtDev(w.activity.stepsDev)}</span>` : ''}${w.activity.kcalActive7 !== null ? `<br>活動kcal ${Math.round(w.activity.kcalActive7)}/日` : ''}` },
   ];

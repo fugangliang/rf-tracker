@@ -323,6 +323,16 @@ console.log('5.8 減量モニタリング（v1.4.0）');
   check('タンパク質 ok（150g）/ low（100g）', e500.protein.state === 'ok' && energy(1900, 2400, 100, 7).protein.state === 'low');
   const e7 = []; for (let n = 21; n <= 27; n++) e7.push(mk(n, { kcalIn: 1900, kcalOut: 2400 }));
   check('収支目標の上書き（deficitTarget 300 で赤字500は above）', st(e7, { deficitTarget: 300 }).energy.state === 'above');
+  // v1.6.2 基礎代謝設定: 消費 = bmr + kcalActive（Garmin kcalOut は使わない）・目安摂取 = 平均消費 − 目標赤字
+  const eb = []; for (let n = 21; n <= 27; n++) eb.push(mk(n, { kcalIn: 1900, kcalOut: 2526, kcalActive: 300 }));
+  const wb = st(eb, { bmr: 1900 }).energy, wg = st(eb).energy;
+  check('bmr未設定は Garmin総消費（2526）で赤字626', wg.basis === 'garmin' && Math.round(wg.kcalOut) === 2526 && Math.round(wg.deficit) === 626);
+  check('bmr=1900で消費=1900+300=2200・赤字300・below', wb.basis === 'bmr' && wb.kcalOut === 2200 && wb.deficit === 300 && wb.state === 'below');
+  check('目安摂取 = 2200 − 500 = 1700', wb.intakeTarget === 1700 && wg.intakeTarget === 2026);
+  check('bmr設定時はkcalActiveがない日を消費に数えない', st(eb.map(e => ({ ...e, kcalActive: null })), { bmr: 1900 }).energy.n === 0);
+  check('目安摂取は摂取記録がなくても出る（消費n≥3）', st(eb.map(e => ({ ...e, kcalIn: null })), { bmr: 1900 }).energy.intakeTarget === 1700);
+  check('bmr≤0・非数値は無視してGarmin推定', st(eb, { bmr: 0 }).energy.basis === 'garmin' && st(eb, { bmr: 'x' }).energy.basis === 'garmin');
+  check('理由文に算定根拠と目安摂取', /基礎代謝1900＋Garmin活動kcal/.test(wb.reason) && /目安摂取 1700kcal/.test(wb.reason));
 
   // --- 活動量 ---
   const act = (recent, baseSteps) => {

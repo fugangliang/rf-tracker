@@ -35,6 +35,7 @@ import datetime
 import json
 import os
 import sys
+import time
 
 TOKEN_DIR = os.path.expanduser("~/.garminconnect")
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -63,6 +64,24 @@ def empty_entry(date):
         "bedHour": None, "sleepHrs": None,  # 就寝時刻（0:30=24.5）・睡眠時間h（v1.6.1・当日分も出す）
         "confounds": [], "excludeBaseline": False, "edema": False, "note": "",
     }
+
+
+# 再試行（v1.6.2・RF承認2026-09-09）: Garmin API の一時不調（Failed to retrieve social profile 等）と
+# push時のネットワーク不調で無人実行が丸1日止まるのを防ぐ。待ち時間は累積（ログイン: 3分→7分＝最大10分）
+LOGIN_RETRY_WAITS = (180, 420)
+PUSH_RETRY_WAITS = (30, 90)
+
+
+def retry(fn, label, waits):
+    """fn() を実行し、失敗したら waits の秒数だけ待って再試行する。全滅したら最後の例外を投げる"""
+    for i, w in enumerate(list(waits) + [None]):
+        try:
+            return fn()
+        except Exception as e:
+            if w is None:
+                raise
+            log(f"{label}失敗（{i + 1}/{len(waits) + 1}回目・{w}秒後に再試行）: {e}")
+            time.sleep(w)
 
 
 def safe(fn, *args):
@@ -222,9 +241,10 @@ def main():
 
     api = Garmin()
     try:
-        api.login(TOKEN_DIR)
+        retry(lambda: api.login(TOKEN_DIR), "トークンでのログイン", LOGIN_RETRY_WAITS)
     except Exception as e:
-        log(f"トークンでのログイン失敗（要再認証: scripts/garmin_auth.py）: {e}")
+        log(f"トークンでのログイン失敗・再試行{len(LOGIN_RETRY_WAITS)}回とも失敗"
+            f"（Garmin側の一時不調の可能性大。まず手動再実行→続くなら再認証: scripts/garmin_auth.py）: {e}")
         sys.exit(0)  # launchd常駐時にエラー扱いにしない
     log(f"取得範囲: {start} 〜 {today}")
 
@@ -297,7 +317,7 @@ def main():
         advice = _ag.load_latest()
         log(f"アドバイス生成失敗（前回分{advice['date'] if advice else 'なし'}を据え置き）: {e}")
     try:
-        n, updated, sha = sync_push.push_mirror(advice)
+        n, updated, sha = retry(lambda: sync_push.push_mirror(advice), "同期push", PUSH_RETRY_WAITS)
         log(f"同期: {n}件{'＋アドバイス' if advice else ''} → {sync_push.REPO}/{sync_push.ENC_FILE} {updated} commit {sha[:7]}")
     except Exception as e:
         log(f"同期push失敗（iCloud配信は完了済み。手動: scripts/sync_push.py --push）: {e}")

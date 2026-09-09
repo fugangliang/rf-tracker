@@ -14,12 +14,24 @@ const dateArg = process.argv[2];
 const entry = dateArg ? entries.find(e => e.date === dateArg) : entries[entries.length - 1];
 if (!entry) { console.error('対象日のエントリなし'); process.exit(1); }
 
-// 端末ローカル設定は写しに無いので既定値（目標体重は基準線ドキュメントの85kg）
-const opts = { goalWeight: 85, deficitTarget: L.WL_DEFAULTS.deficitTarget, proteinTarget: L.WL_DEFAULTS.proteinTarget };
+// 端末ローカル設定は写しに無いので既定値（目標体重は基準線ドキュメントの85kg）。
+// 基礎代謝（v1.6.2）は data/advice_config.json の bmr（体組成計の値）。無ければGarmin推定消費
+let cfg = {};
+try { cfg = JSON.parse(fs.readFileSync(path.join(ROOT, 'data', 'advice_config.json'), 'utf8')); } catch (e) { /* 設定なし */ }
+const opts = { goalWeight: 85, deficitTarget: L.WL_DEFAULTS.deficitTarget, proteinTarget: L.WL_DEFAULTS.proteinTarget,
+  bmr: typeof cfg.bmr === 'number' && cfg.bmr > 0 ? cfg.bmr : L.WL_DEFAULTS.bmr };
 const lines = [];
 lines.push(L.statusHeaderText(entries, entry, opts));
 lines.push('');
 lines.push(L.weightLossText(entries, entry.date, opts));
+{
+  const en = L.weightLossStatus(entries, entry.date, opts).energy;
+  lines.push(`【消費kcalの算定根拠】${en.basisLabel}` + (en.basis === 'bmr'
+    ? `。表の「消費」列（Garmin総消費）は基礎代謝が体組成計より約300kcal高く出るため収支には使わない。` +
+      `今日の摂取目安は${en.intakeTarget !== null ? ` ${Math.round(en.intakeTarget)}kcal（7日平均消費 ${Math.round(en.kcalOut)} − 目標赤字 ${en.target}）` : ' 判定保留（活動kcalの日数不足）'}。` +
+      `Garminアプリ上の摂取目標は基礎代謝過大のため参考にしない`
+    : ''));
+}
 lines.push('');
 
 // 負荷（Garminストレス）の基準線比
@@ -121,7 +133,7 @@ try {
     lines.push('');
     lines.push(`【前日 ${prevDate} の食事内訳（Garmin食事ログ）】`);
     for (const m of n.meals || []) lines.push(`${m.name}: ${m.calories ?? '—'}kcal / P${m.protein ?? '—'} F${m.fat ?? '—'} C${m.carbs ?? '—'}${m.foods && m.foods.length ? ' — ' + m.foods.join('、') : ''}`);
-    if (n.total) lines.push(`合計: ${n.total.calories ?? '—'}kcal / P${n.total.protein ?? '—'} F${n.total.fat ?? '—'} C${n.total.carbs ?? '—'}（目標 ${n.goals ? `${n.goals.calories}kcal / P${n.goals.protein}` : '—'}）`);
+    if (n.total) lines.push(`合計: ${n.total.calories ?? '—'}kcal / P${n.total.protein ?? '—'} F${n.total.fat ?? '—'} C${n.total.carbs ?? '—'}（タンパク質目標 ${opts.proteinTarget}g。kcal目標は上記【消費kcalの算定根拠】の摂取目安）`);
   }
 } catch (e) { /* 内訳なしは省略 */ }
 process.stdout.write(lines.join('\n') + '\n');
